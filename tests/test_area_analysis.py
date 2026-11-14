@@ -56,5 +56,37 @@ class AreaSeriesTest(unittest.TestCase):
         self.assertEqual(area_analysis._area_series({}), {})
 
 
+def _station(longitude: float, latitude: float) -> dict:
+    return {"geometry": {"type": "Point", "coordinates": [longitude, latitude]}}
+
+
+class StationHullTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.region = area_analysis.REGIONS[0]
+
+    def test_convex_hull_drops_inner_points(self) -> None:
+        square = [(0, 0), (2, 0), (2, 2), (0, 2)]
+        self.assertEqual(sorted(area_analysis._convex_hull(square + [(1, 1), (1, 0)])), sorted(square))
+
+    def test_hull_encloses_every_station_with_a_border(self) -> None:
+        stations = [_station(11.0, 48.0), _station(12.0, 48.2), _station(11.5, 49.0), _station(11.5, 48.4)]
+        ring = area_analysis._station_hull(stations, self.region)["coordinates"][0]
+        self.assertEqual(ring[0], ring[-1])
+        longitudes = [p[0] for p in ring]
+        latitudes = [p[1] for p in ring]
+        border = area_analysis.HULL_BORDER_KM / 111.32
+        self.assertAlmostEqual(max(latitudes), 49.0 + border, places=3)
+        self.assertAlmostEqual(min(latitudes), 48.0 - border, places=3)
+        self.assertLess(min(longitudes), 11.0)
+        self.assertGreater(max(longitudes), 12.0)
+
+    def test_single_station_gives_a_circle_and_none_gives_the_box(self) -> None:
+        ring = area_analysis._station_hull([_station(11.0, 48.0)], self.region)["coordinates"][0]
+        self.assertEqual(len(ring), area_analysis._HULL_CIRCLE_POINTS + 1)
+        west, south, east, north = self.region.bbox
+        box = area_analysis._station_hull([], self.region)["coordinates"][0]
+        self.assertEqual(box, [[west, south], [east, south], [east, north], [west, north], [west, south]])
+
+
 if __name__ == "__main__":
     unittest.main()
