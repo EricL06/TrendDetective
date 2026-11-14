@@ -489,8 +489,8 @@
         <div class="map-box" aria-label="TrendDetective World Map">
             <div id="map-widget"></div>
             <div class="place-search" role="search">
-                <input id="place-search" type="search" placeholder="Search city or region…"
-                    autocomplete="off" aria-label="Search city or region"
+                <input id="place-search" type="search" placeholder="Search city, region or lat, lon…"
+                    autocomplete="off" aria-label="Search city, region or coordinates"
                     role="combobox" aria-expanded="false" aria-controls="place-results" aria-autocomplete="list">
                 <span class="place-search-status" id="place-search-status" aria-hidden="true"></span>
                 <ul class="place-results" id="place-results" role="listbox" hidden></ul>
@@ -571,7 +571,7 @@
             // near it). Areas can only be the predefined regions, so for states, counties,
             // countries etc. the map zooms there and shows the regions (Areas).
             const POINT_KINDS = new Set(['city', 'town', 'village', 'hamlet', 'suburb', 'quarter',
-                'neighbourhood', 'borough', 'city district', 'municipality', 'locality']);
+                'neighbourhood', 'borough', 'city district', 'municipality', 'locality', 'coordinates']);
 
             function placeArea(place) {
                 const properties = { placeName: place.name, placeLabel: place.label };
