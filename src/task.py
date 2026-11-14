@@ -482,9 +482,23 @@ def process_user_request(user_request: Any) -> dict[str, Any]:
     station_features: dict[str, dict[str, Any]] = {}
 
     for topic in selected_topics:
-        records = _load_records_for_topic(
-            topic, latitude, longitude, start_date, end_date
-        )
+        try:
+            records = _load_records_for_topic(
+                topic, latitude, longitude, start_date, end_date
+            )
+        except (RuntimeError, ValueError) as error:
+            # One topic without a nearby station must not cancel the others
+            # (NOAAError is a RuntimeError). The frontend shows the message.
+            topic_results[topic] = {
+                "labels": [],
+                "values": [],
+                "mean": None,
+                "coordinates": [latitude, longitude],
+                "station": None,
+                "error": str(error),
+                "tools": {},
+            }
+            continue
         station = _station_from_records(records, latitude, longitude)
         if station is not None:
             station_key = str(station["id"] or f"{station['latitude']},{station['longitude']}")
@@ -505,7 +519,7 @@ def process_user_request(user_request: Any) -> dict[str, Any]:
                         "elevation_m": station["elevation"],
                         "distance_km": station["distance_km"],
                         "topics": [],
-                        "color": "#f59e0b",
+                        "color": "#7c3aed",
                     },
                 },
             )

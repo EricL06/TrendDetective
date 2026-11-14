@@ -263,10 +263,18 @@
             gap: 0.4rem;
             margin-bottom: 0.6rem;
         }
+        .topic-error {
+            font-size: 0.8rem;
+            color: #991b1b;
+            background: #fee2e2;
+            border-radius: 6px;
+            padding: 4px 8px;
+            margin: 6px 0;
+        }
         .station-line {
             font-size: 0.8rem;
-            color: #92400e;
-            background: #fef3c7;
+            color: #5b21b6;
+            background: #ede9fe;
             border-radius: 6px;
             padding: 4px 8px;
             margin: 6px 0;
@@ -701,6 +709,7 @@
 
             if (window.trendMap && Array.isArray(visualization.map_layers)) {
                 window.trendMap.setResultData(visualization.map_layers);
+                fitMapToSelectionAndStations(visualization.map_layers);
             }
 
             const entries = Object.entries(visualization.topics);
@@ -741,11 +750,38 @@
                         <span style="font-size:0.78rem;color:#64748b;">[${info.coordinates[0]}, ${info.coordinates[1]}]</span>
                     </div>
                     ${stationHtml}
+                    ${info.error ? `<div class="topic-error">⚠ ${escapeText(info.error)}</div>` : ''}
                     <div class="badge-row">${badgesHtml}</div>
                     ${chartSvg}
                 `;
                 container.appendChild(card);
             }
+        }
+
+        // Zoom so the selected area and every measuring station are visible together;
+        // a station can be tens of kilometres outside the selection.
+        function fitMapToSelectionAndStations(mapLayers) {
+            if (!window.trendMap || typeof window.trendMap.fitToBounds !== 'function') {
+                return;
+            }
+            const points = [];
+            const area = window.getSelectedArea ? window.getSelectedArea() : null;
+            if (area && Array.isArray(area.bbox) && area.bbox.length === 4) {
+                points.push([area.bbox[0], area.bbox[1]], [area.bbox[2], area.bbox[3]]);
+            }
+            for (const layer of mapLayers) {
+                if (layer.id !== 'measuring-stations' || !layer.data) continue;
+                for (const feature of layer.data.features || []) {
+                    const c = feature.geometry && feature.geometry.coordinates;
+                    if (Array.isArray(c) && c.length >= 2) points.push([c[0], c[1]]);
+                }
+            }
+            if (points.length < 2) return;
+            const lons = points.map((p) => p[0]);
+            const lats = points.map((p) => p[1]);
+            window.trendMap.fitToBounds([
+                Math.min(...lons), Math.min(...lats), Math.max(...lons), Math.max(...lats),
+            ]);
         }
 
         function escapeText(value) {
