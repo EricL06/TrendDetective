@@ -70,8 +70,10 @@ print(topic_names)
 ```
 
 Run the fixed live example with `python noaa_test.py`. It requests
-precipitation near Washington, DC for January 2020 and displays the returned
-records.
+temperature near Washington, DC from January through May 2020 and displays
+the returned records. Each output entry is one measured variable with shared
+lowercase station metadata keys, a numeric `value`, and a lowercase
+`description` such as `tmax` or `tmin`.
 
 ## Add another provider
 

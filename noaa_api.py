@@ -42,6 +42,85 @@ at the equator; longitude width narrows toward the poles.
 """
 
 
+_STANDARD_FIELDS: dict[str, str] = {
+    "date": "date",
+    "station": "station",
+    "longitude": "longitude",
+    "elevation": "elevation",
+    "latitude": "latitude",
+    "name": "name",
+}
+"""Standard NOAA station metadata mapped to normalized output names."""
+
+
+def _as_number(value: Any) -> float | int | str | None:
+    """Convert numeric NOAA values to numbers and preserve other values.
+
+    :param value: Original value from an NCEI JSON field.
+    :type value: typing.Any
+    :returns: Integer/float for numeric input, the original string for
+        non-numeric text, or ``None`` if empty.
+    :rtype: float, int, str, or None
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        try:
+            number: float = float(value)
+        except ValueError:
+            return value
+        return int(number) if number.is_integer() else number
+    return str(value)
+
+
+def _normalize_observations(payload: Any) -> list[dict[str, Any]]:
+    """Expand each raw NCEI row into one record per measured variable.
+
+    Every output record contains the six normalized station metadata fields,
+    plus a numeric ``value`` when NOAA provides a numeric value and lowercase
+    variable ``description``. Empty measurements are omitted; non-numeric text
+    is preserved as text.
+
+    :param payload: JSON-decoded NCEI response, normally a list of row dicts.
+    :type payload: typing.Any
+    :returns: Expanded observation records.
+    :rtype: list[dict[str, typing.Any]]
+    :raises NOAAError: If the response is not a list of object rows.
+    """
+    if not isinstance(payload, list) or any(
+        not isinstance(row, dict) for row in payload
+    ):
+        raise NOAAError("NOAA NCEI returned an unexpected observation format")
+
+    normalized: list[dict[str, Any]] = []
+    for row in payload:
+        values_by_lowercase_name: dict[str, Any] = {
+            str(key).lower(): value for key, value in row.items()
+        }
+        metadata: dict[str, Any] = {
+            output_name: values_by_lowercase_name.get(source_name)
+            for source_name, output_name in _STANDARD_FIELDS.items()
+        }
+        for coordinate_key in ("longitude", "elevation", "latitude"):
+            metadata[coordinate_key] = _as_number(metadata[coordinate_key])
+
+        for key, raw_value in row.items():
+            description: str = str(key).lower()
+            if description in _STANDARD_FIELDS:
+                continue
+            value: float | int | str | None = _as_number(raw_value)
+            if value is not None:
+                normalized.append(
+                    {**metadata, "value": value, "description": description}
+                )
+
+    return normalized
+
+
 @dataclass(frozen=True)
 class NOAATopic:
     """A user-facing variable family mapped to NCEI dataset observation codes.
@@ -311,7 +390,9 @@ class NOAAClient:
         :type request: PointDataRequest
         :param output_dir: Directory where the JSON response will be saved.
         :type output_dir: str or pathlib.Path
-        :returns: One path to the saved JSON response file.
+        :returns: One path to a JSON file containing one entry per
+            measurement, with normalized metadata, numeric ``value``, and
+            lowercase variable ``description``.
         :rtype: list[pathlib.Path]
         :raises ValueError: If the requested topic is not in :data:`TOPICS`.
         :raises NOAAError: If the service returns an HTTP error or invalid JSON.
@@ -357,7 +438,8 @@ class NOAAClient:
             "format": "json",
             "units": "metric",
         }
-        payload: Any = self._get_json(BASE_URL, data_params)
+        raw_payload: Any = self._get_json(BASE_URL, data_params)
+        payload: list[dict[str, Any]] = _normalize_observations(raw_payload)
 
         destination: Path = Path(output_dir)
         destination.mkdir(parents=True, exist_ok=True)

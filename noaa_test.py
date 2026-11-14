@@ -1,9 +1,9 @@
 """Run a fixed live NOAA NCEI integration request and print returned data.
 
-The example requests daily precipitation observations near Washington, DC,
-for January 2020. It saves the NOAA JSON response under ``data/noaa_test/``
-and prints up to ten returned records. The NCEI Access Data Service does not
-require an API key.
+The example requests daily temperature observations near Washington, DC,
+from January through May 2020. It saves normalized NOAA observations under
+``data/noaa_test/`` and prints up to ten returned records. The NCEI Access
+Data Service does not require an API key.
 
 Run from the repository root with::
 
@@ -25,11 +25,11 @@ from noaa_api import NOAAError
 REQUEST: PointDataRequest = PointDataRequest(
     latitude=38.8951,
     longitude=-77.0364,
-    topic="precipitation",
+    topic="temperature",
     start_date=date(2020, 1, 1),
     end_date=date(2020, 5, 31),
 )
-"""Fixed integration request: precipitation near Washington, DC, in January 2020."""
+"""Fixed integration request: temperature near Washington, DC, in early 2020."""
 
 OUTPUT_DIR: Path = Path("data/noaa_test")
 """Directory for the saved NOAA response."""
