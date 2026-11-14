@@ -4,7 +4,8 @@ React + TypeScript widget built on MapLibre GL JS and Terra Draw. Users select a
 globe (rectangle, polygon, freehand); the widget hands it out as GeoJSON and shows the Data
 Loader's results (GeoJSON vectors, value fields on a border-refined triangle mesh, raster tiles, images) on the same map.
 
-**API reference (inputs/outputs of every function): [API.md](API.md)**
+- **[API.md](API.md)** – how to put the widget into the website: what it needs, what it delivers.
+- **[DEVELOPMENT.md](DEVELOPMENT.md)** – internal reference: libraries, architecture, how each part works, pitfalls.
 
 ## Run the demo
 

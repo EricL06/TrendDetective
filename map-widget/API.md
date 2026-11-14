@@ -1,131 +1,85 @@
-# Map Widget – API Reference
+# Map Widget – Integration Guide
 
-What goes **into** the widget and what comes **out** of it, written for the
-interface developer (Hauptfrontend) and the data developer (Data Loader).
-Source of truth: [`src/widget/types.ts`](src/widget/types.ts). Import everything from `src/widget`:
+The widget is a React component. The user draws an area on a map; you get that area as GeoJSON.
+You send data back; the widget draws it on the same map.
 
-```ts
-import { MapWidget, splitAtAntimeridian, type AreaFeature, type MapData } from "./map-widget/src/widget";
+```
+user draws ──► MapWidget ──onAreaSelected(area)──► your page ──► Data Loader
+                   ▲                                                  │
+                   └──────────────── resultData ◄─────────────────────┘
 ```
 
-Conventions everywhere: WGS84 / EPSG:4326, coordinates are `[longitude, latitude]`, polygons are closed.
+All coordinates are `[longitude, latitude]` in WGS84.
 
 ---
 
-## 1. Data flow at a glance
+## 1. Add it to the website
 
-```
-User draws ──► MapWidget ──onAreaSelected(area: AreaFeature)──► Hauptfrontend ──► Data Loader
-                  ▲                                                                   │
-                  └────────────── resultData: MapData | MapData[] ◄───────────────────┘
+Copy (or reference) the folder `map-widget/src/widget/` and install its dependencies:
+
+```bash
+npm install maplibre-gl terra-draw terra-draw-maplibre-gl-adapter earcut
 ```
 
-| Direction | Name | Type | Who uses it |
+The project must use **Vite** (the widget loads a MapLibre file with Vite's `?url` import).
+
+```tsx
+import { useState } from "react";
+import { MapWidget, type AreaFeature, type MapData } from "./widget";
+
+export function MapSection() {
+  const [data, setData] = useState<MapData>();
+  const [loading, setLoading] = useState(false);
+
+  return (
+    <div style={{ height: 600 }}>                 {/* the widget fills its parent: give it a height */}
+      <MapWidget
+        onAreaSelected={async (area: AreaFeature) => {
+          setLoading(true);
+          setData(await dataLoader.load(area));  // ← your Data Loader
+          setLoading(false);
+        }}
+        onAreaCleared={() => setData(undefined)}
+        resultData={data}
+        loading={loading}
+      />
+    </div>
+  );
+}
+```
+
+A working example: [`src/demo/App.tsx`](src/demo/App.tsx).
+
+---
+
+## 2. What the widget needs (props)
+
+| Prop | Type | Required | What it is |
 |---|---|---|---|
-| Widget → Frontend | `onAreaSelected` | `(area: AreaFeature) => void` | Frontend passes `area` to the Data Loader |
-| Widget → Frontend | `onAreaCleared` | `() => void` | Frontend clears results |
-| Frontend → Widget | `resultData` | `MapData \| MapData[]` | Data Loader output, unchanged |
-| Frontend → Widget | `loading` | `boolean` | `true` while the Data Loader is working |
-| Frontend → Widget | `initialArea` | `Feature<Polygon>` | Optional preset selection |
-
-**Data Loader contract (suggested signature):**
-
-```ts
-async function loadData(area: AreaFeature /* + your own params, e.g. dataset, date */): Promise<MapData | MapData[]>
-```
+| `onAreaSelected` | `(area: AreaFeature) => void` | **yes** | Called when the user finishes drawing or editing an area. |
+| `onAreaCleared` | `() => void` | no | Called when the user deletes the area. |
+| `resultData` | `MapData` or `MapData[]` | no | The data to show (see §4). `undefined` = show nothing. |
+| `loading` | `boolean` | no | Shows "Loading data…" while `true`. |
+| `initialArea` | GeoJSON polygon feature | no | An area to show when the page opens. |
+| `basemap` | `"streets"`, `"light"`, `"dark"`, `"satellite"` | no | Start map. Default `"streets"`. |
+| `projection` | `"globe"` or `"mercator"` | no | Start view. Default `"globe"`. |
 
 ---
 
-## 2. `<MapWidget>` component
+## 3. What the widget delivers: `AreaFeature`
 
-```tsx
-function MapWidget(props: MapWidgetProps & { ref?: Ref<MapWidgetHandle> }): JSX.Element
-```
-
-The widget fills its parent element. Give the parent a height.
-
-### Props – `MapWidgetProps`
-
-| Prop | Type | Required | Default | Meaning |
-|---|---|---|---|---|
-| `onAreaSelected` | `(area: AreaFeature) => void` | **yes** | – | Fired when the user **finishes** drawing a shape and after **every edit** (move, resize, vertex drag). Same `selectionId` while editing. |
-| `onAreaCleared` | `() => void` | no | – | Fired when the user deletes the selection. |
-| `resultData` | `MapData \| MapData[]` | no | – | Data to show. An array is drawn bottom → top. Pass `undefined` to clear. Replacing the object re-renders. |
-| `loading` | `boolean` | no | `false` | Shows a "Loading data…" badge. |
-| `initialArea` | `Feature<Polygon>` | no | – | Selection shown on mount (read once). The map zooms to it. Does **not** fire `onAreaSelected`. |
-| `basemap` | `"streets" \| "light" \| "dark" \| "satellite" \| string \| StyleSpecification` | no | `"streets"` | Preset, MapLibre style URL, or style object. The user can also switch in the toolbar. |
-| `projection` | `"globe" \| "mercator"` | no | `"globe"` | Starting projection. The user can switch in the toolbar. |
-| `hideToolbar` | `boolean` | no | `false` | Hide built-in buttons (drive it via `ref` instead). |
-| `className` | `string` | no | – | Extra class on the root element. |
-| `style` | `CSSProperties` | no | – | Inline style on the root element. |
-
-### Imperative handle – `MapWidgetHandle` (via `ref`)
-
-```ts
-interface MapWidgetHandle {
-  getArea(): AreaFeature | null;   // current selection, or null
-  clearArea(): void;               // remove selection (does NOT fire onAreaCleared)
-  fitToArea(): void;               // zoom the map to the selection
-  setTool(tool: DrawTool): void;   // "select" | "rectangle" | "polygon" | "freehand"
-}
-```
-
-### Minimal integration
-
-```tsx
-const [area, setArea] = useState<AreaFeature | null>(null);
-const [data, setData] = useState<MapData>();
-const [loading, setLoading] = useState(false);
-
-<div style={{ height: 600 }}>
-  <MapWidget
-    onAreaSelected={async (a) => {
-      setArea(a);
-      setLoading(true);
-      setData(await dataLoader.load(a));   // ← Data Loader
-      setLoading(false);
-    }}
-    onAreaCleared={() => setData(undefined)}
-    resultData={data}
-    loading={loading}
-  />
-</div>
-```
-
-A complete example (including race handling for fast re-selections) is in [`src/demo/App.tsx`](src/demo/App.tsx).
-
----
-
-## 3. Output type – `AreaFeature` (Widget → Data Loader)
-
-```ts
-type AreaFeature = Feature<Polygon, AreaProperties> & { bbox: BBox };
-
-interface AreaProperties {
-  selectionId: string;            // "area-001", "area-002", … stable while the user edits
-  shape: "rectangle" | "polygon" | "freehand";
-  crossesAntimeridian: boolean;   // true if the area spans the ±180° line
-  areaKm2: number;                // geodesic area, 0.1 km² precision
-}
-
-type BBox = [west: number, south: number, east: number, north: number];
-```
-
-Guarantees:
-- Exactly **one** outer ring, **closed** (first point = last point), **counter-clockwise** (RFC 7946).
-- Coordinates rounded to 6 decimals (~0.1 m); latitudes within [-90, 90].
-- `bbox` is always present. If `crossesAntimeridian` is `true`, then `west > east` (RFC 7946 §5.2), e.g. `[170, -10, -170, 10]`.
-- If the area crosses the antimeridian, the ring stays **continuous**, so some longitudes are outside ±180
-  (e.g. `-197.9`). Use `splitAtAntimeridian()` if your API needs strictly wrapped coordinates.
-- Only one selection exists at a time; drawing a new one replaces the old one.
-
-Example:
+`onAreaSelected` receives a GeoJSON Feature:
 
 ```json
 {
   "type": "Feature",
   "bbox": [6.0, 50.0, 8.0, 52.0],
-  "properties": { "selectionId": "area-001", "shape": "rectangle", "crossesAntimeridian": false, "areaKm2": 31193.4 },
+  "properties": {
+    "selectionId": "area-001",
+    "shape": "rectangle",
+    "crossesAntimeridian": false,
+    "areaKm2": 31193.4
+  },
   "geometry": {
     "type": "Polygon",
     "coordinates": [[[6.0, 50.0], [8.0, 50.0], [8.0, 52.0], [6.0, 52.0], [6.0, 50.0]]]
@@ -133,214 +87,75 @@ Example:
 }
 ```
 
-Tip for NASA APIs: CMR / Earthdata `bounding_box=W,S,E,N` accepts `area.bbox` directly (including `W > E`).
+| Field | Meaning |
+|---|---|
+| `geometry` | The drawn area. Closed polygon, one ring. |
+| `bbox` | `[west, south, east, north]`. Easiest input for most APIs. |
+| `selectionId` | Same id while the user edits the area; new id for a new area. |
+| `shape` | `"rectangle"`, `"polygon"` or `"freehand"`. |
+| `areaKm2` | Size of the area. |
+| `crossesAntimeridian` | `true` if the area spans the ±180° line. Then `bbox` has `west > east`. |
+
+There is only ever one area at a time.
 
 ---
 
-## 4. Input type – `MapData` (Data Loader → Widget)
+## 4. What the widget needs back: `MapData`
 
-```ts
-type MapData = GeoJsonMapData | RasterMapData | ImageMapData | FieldMapData;
-```
+Pick the type that matches your data.
 
-Which one to use:
-- Values at locations (gridded product, station values) that should **fill the selected area** → `field` (4.4).
-- Ready-made shapes (points, lines, polygons) → `geojson` (4.1).
-- Pre-rendered map tiles or images → `raster` (4.2) / `image` (4.3).
+### Values to fill the area with (recommended for trends) – `field`
 
-All variants accept two optional fields:
-
-| Field | Type | Meaning |
-|---|---|---|
-| `id` | `string` | Name for the layer (used in layer ids). |
-| `opacity` | `number` (0–1) | Layer opacity. |
-
-### 4.1 Vector – `GeoJsonMapData`
-
-```ts
-{ type: "geojson"; data: FeatureCollection; id?: string; opacity?: number }
-```
-
-- Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon are drawn automatically.
-- `feature.properties.color` (any CSS color, e.g. `"#d7301f"` or `"rgb(200,30,30)"`) sets the color per feature.
-  Without it, features are blue.
-- All other properties are shown in a popup when the user clicks the feature (in "Pan & edit" mode).
-
-### 4.2 Raster tiles – `RasterMapData`
-
-```ts
-{
-  type: "raster";
-  tiles: string[];        // XYZ URL templates with {z}/{x}/{y}, Web Mercator tile grid (EPSG:3857)
-  bounds?: BBox;          // only request tiles inside this box
-  tileSize?: number;      // default 256
-  minzoom?: number;
-  maxzoom?: number;       // highest zoom the server has; MapLibre upscales beyond it
-  attribution?: string;
-  id?: string;
-  opacity?: number;       // default 0.8
-}
-```
-
-NASA GIBS example:
-
-```ts
-{
-  type: "raster",
-  tiles: ["https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_Land_Surface_Temp_Day/default/2025-07-01/GoogleMapsCompatible_Level7/{z}/{y}/{x}.png"],
-  bounds: area.bbox,
-  maxzoom: 7,
-}
-```
-
-Note: `bounds` limits which tiles are **loaded**; it does not cut tiles exactly at the box edge.
-
-### 4.3 Single image – `ImageMapData` (extension of the spec)
-
-```ts
-{ type: "image"; url: string; bounds: BBox; id?: string; opacity?: number }
-```
-
-Stretches one image (PNG/JPEG, e.g. a WMS `GetMap` result) over `bounds`.
-The image should be in Web Mercator (EPSG:3857). An EPSG:4326 image will be shifted in latitude over large areas.
-
-### 4.4 Scalar field on a triangle mesh – `FieldMapData` (extension of the spec)
-
-```ts
-{
-  type: "field";
-  samples: FeatureCollection<Point>;   // e.g. grid-cell centres, each with a numeric value
-  valueProperty?: string;              // property holding the value, default "value"
-  area?: Feature<Polygon>;             // polygon to fill; default = current selection
-  colorScale?: { min?: number; max?: number; colors?: string[] };  // default: data min/max, blue–white–red
-  mesh?: { baseCells?: number; borderRefinement?: number };        // default 16 / 3, see §5
-  showMesh?: boolean;                  // draw triangle edges
-  id?: string;
-  opacity?: number;                    // default 0.75
-}
-```
-
-The widget fills `area` with a triangle mesh that ends **exactly** on the area border, refined
-near the border, and colours each triangle by the value interpolated (inverse distance weighting)
-from `samples` at the triangle centroid. Clicking a triangle shows its value.
-
-Tips for the Data Loader:
-- Send samples that cover the whole `area.bbox`, including a little outside the polygon, so
-  values near the border are well supported.
-- Pass `area` explicitly (the `AreaFeature` you were given), so the mesh matches the request even
-  if the user edits the selection meanwhile.
-- Sample longitudes may be wrapped (±180) or continuous; both work across the antimeridian.
-
-Example:
+Send points with a number; the widget fills the area with coloured triangles.
 
 ```ts
 {
   type: "field",
   samples: { type: "FeatureCollection", features: [
-    { type: "Feature", properties: { trend: 0.42 }, geometry: { type: "Point", coordinates: [6.5, 50.5] } },
-    // …
+    { type: "Feature", properties: { value: 0.42 }, geometry: { type: "Point", coordinates: [6.5, 50.5] } },
+    // … more points, spread over the whole area
   ] },
-  valueProperty: "trend",
-  area,
-  colorScale: { min: -1, max: 1 },
+  area,                                   // the AreaFeature you received
+  colorScale: { min: -1, max: 1 },        // optional
 }
 ```
 
----
-
-## 5. Helper functions (exported)
+### Points, lines, shapes – `geojson`
 
 ```ts
-splitAtAntimeridian<P>(feature: Feature<Polygon, P>): Feature<Polygon | MultiPolygon, P>
+{ type: "geojson", data: featureCollection }
 ```
-Input: a polygon feature (e.g. an `AreaFeature`). Output: the same feature with all longitudes in [-180, 180];
-becomes a `MultiPolygon` if the area crosses the antimeridian (RFC 7946 §3.1.9). Non-crossing input is returned unchanged.
+
+Optional `properties.color` per feature (e.g. `"#d7301f"`). Clicking a feature shows its properties.
+
+### Map tiles – `raster`
 
 ```ts
-wrapLng(lng: number): number
+{
+  type: "raster",
+  tiles: ["https://…/{z}/{x}/{y}.png"],   // Web Mercator XYZ tiles, e.g. NASA GIBS
+  bounds: area.bbox,                      // optional: only load tiles here
+  maxzoom: 7,                             // optional
+}
 ```
-Input: any longitude. Output: the same longitude in [-180, 180] (180 stays 180).
+
+### One image – `image`
 
 ```ts
-geodesicAreaKm2(ring: Position[]): number
+{ type: "image", url: "https://…/picture.png", bounds: [west, south, east, north] }
 ```
-Input: closed ring of `[lng, lat]`. Output: area in km² (spherical Earth).
 
-```ts
-triangulateArea(ring: Position[], opts?: MeshOptions): MeshTriangle[]
-
-interface MeshOptions { baseCells?: number; borderRefinement?: number }
-interface MeshTriangle { ring: Position[]; centroid: Position; level: number }
-```
-Input: closed ring `[lng, lat]` (e.g. `area.geometry.coordinates[0]`).
-Output: triangles whose union is exactly the polygon. `ring` is a closed 4-point ring, `centroid` is
-where values are sampled, `level` is the refinement level (0 = base cell).
-- `baseCells` (default 16): number of square base cells along the longer side of the bounding box.
-- `borderRefinement` (default 3): cells cut by the border are split into 4 this many times (each level halves the size);
-  the finest border cells are then clipped exactly to the polygon. Interior cells stay coarse.
-- Meshing happens in Web Mercator space, where MapLibre draws polygon edges as straight lines, so the
-  mesh border matches the drawn selection border at every size.
-- Cost: ~3 ms for the defaults (~3,000 triangles); 16/5 gives ~10,000 triangles in ~10 ms.
-
-```ts
-idwValue(p: Position, samples: { lng: number; lat: number; value: number }[]): number | null
-```
-Input: a position and point samples. Output: inverse-distance-weighted value (power 2), or `null` without samples.
-
-```ts
-BASEMAPS: Record<BasemapId, { label: string; style: string | StyleSpecification }>
-```
-The built-in basemap presets (all key-free: OpenFreeMap and NASA GIBS Blue Marble).
+Several layers at once: pass an array, e.g. `resultData={[rasterLayer, stationPoints]}`.
 
 ---
 
-## 6. Internal modules (for widget developers)
+## 5. Optional: control it from your page
 
-Not needed for integration. Listed so the module boundaries from the spec are visible.
+```tsx
+const ref = useRef<MapWidgetHandle>(null);
+<MapWidget ref={ref} … />
 
-### `MapEngine` – [`src/widget/MapEngine.ts`](src/widget/MapEngine.ts)
-
-| Member | Input | Output | Purpose |
-|---|---|---|---|
-| `new MapEngine(opts)` | `{ container: HTMLElement; style: string \| StyleSpecification; projection: ProjectionType; center?: [lng, lat]; zoom?: number }` | instance | Creates the MapLibre map and controls. |
-| `map` | – | `maplibregl.Map` | The raw map. |
-| `onStyleReady(fn)` | `() => void` | unsubscribe `() => void` | Called after every style load. |
-| `onBeforeStyleChange(fn)` | `() => void` | unsubscribe `() => void` | Called right before the basemap is replaced. |
-| `setStyle(style)` | `string \| StyleSpecification` | `void` | Switch basemap. |
-| `setProjection(p)` | `"globe" \| "mercator"` | `void` | Switch projection. |
-| `fitToBBox(bbox, opts?)` | `BBox`, `{ padding?: number; maxZoom?: number }` | `void` | Zoom to a box (antimeridian-aware). |
-| `firstBasemapSymbolLayerId(ignore)` | `string[]` (layer id prefixes) | `string \| undefined` | First label layer, so data goes below labels. |
-| `destroy()` | – | `void` | Removes the map. |
-
-### `SelectionManager` – [`src/widget/SelectionManager.ts`](src/widget/SelectionManager.ts)
-
-| Member | Input | Output | Purpose |
-|---|---|---|---|
-| `new SelectionManager(cb)` | `{ onChange: (area: AreaFeature \| null) => void; onToolChange: (tool: DrawTool) => void }` | instance | Wraps Terra Draw. |
-| `attach(map)` | `maplibregl.Map` | `void` | Start Terra Draw (after style load). Restores a parked selection. |
-| `detach()` | – | `void` | Stop Terra Draw, keep the selection (before style change / unmount). |
-| `setTool(tool)` | `DrawTool` | `void` | Switch drawing mode. |
-| `currentTool` | – | `DrawTool` | Active mode. |
-| `getArea()` | – | `AreaFeature \| null` | Export the selection as GeoJSON. |
-| `setArea(feature)` | `Feature<Polygon>` | `boolean` (false = rejected) | Set the selection from code. Does not fire `onChange`. |
-| `clear(notify)` | `boolean` | `void` | Remove the selection; `notify = true` fires `onChange(null)`. |
-
-### `DataRenderer` – [`src/widget/DataRenderer.ts`](src/widget/DataRenderer.ts)
-
-| Member | Input | Output | Purpose |
-|---|---|---|---|
-| `new DataRenderer(map, opts)` | `maplibregl.Map`, `{ beforeLayerId: () => string \| undefined; popupsEnabled: () => boolean; currentArea: () => Feature<Polygon> \| null }` | instance | Draws result layers. |
-| `setData(data)` | `MapData[]` | `void` | Replace all result layers. |
-| `suspend()` | – | `void` | Call before the style is replaced. |
-| `reapply()` | – | `void` | Re-add layers after a style load. |
-| `destroy()` | – | `void` | Remove listeners and popup. |
-
-### `geo.ts` (internal helpers besides the exported ones)
-
-| Function | Input | Output |
-|---|---|---|
-| `mesh.ts` → `triangulateArea`, `idwValue` | see §5 | Mesh used by `field` data |
-| `normalizeRing(ring)` | `Position[]` | `{ ring: Position[]; bbox: BBox; crossesAntimeridian: boolean }` – closed, CCW, rounded, shifted to centre within ±180 |
-| `isAxisAlignedRectangle(ring)` | `Position[]` | `boolean` |
-
-Map layer id prefixes: `mw-data-*` (results), `mw-sel-*` (selection). Avoid these in host styles.
+ref.current?.getArea();      // current area or null
+ref.current?.clearArea();    // remove the area
+ref.current?.fitToArea();    // zoom to the area
+```
