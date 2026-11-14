@@ -1,12 +1,12 @@
 // Simulated Data Loader for local testing. The real loader (NASA APIs) is owned by the data team;
 // it only has to accept an AreaFeature and return MapData — the same contract as here.
-import type { Feature, Point, Position } from "geojson";
+import type { Feature, Position } from "geojson";
 import type { AreaFeature, MapData } from "../widget";
 
 export type MockDataset = "grid" | "stations" | "lst";
 
 export const MOCK_DATASETS: { id: MockDataset; label: string }[] = [
-  { id: "grid", label: "Trend field (samples → triangle mesh)" },
+  { id: "grid", label: "Mean trend (area filled with one colour)" },
   { id: "stations", label: "Stations (GeoJSON points)" },
   { id: "lst", label: "MODIS land surface temp (raster tiles, NASA GIBS)" },
 ];
@@ -16,15 +16,24 @@ export async function mockLoadData(area: AreaFeature, dataset: MockDataset): Pro
   const ring = area.geometry.coordinates[0];
 
   switch (dataset) {
-    case "grid":
+    case "grid": {
+      // The whole selected area, filled with the colour of its mean trend.
+      const mean = meanTrend(ring);
       return {
-        type: "field",
-        id: "trend-field",
-        samples: { type: "FeatureCollection", features: trendSamples(ring) },
-        valueProperty: "trend_K_per_decade",
-        area,
-        colorScale: { min: -1, max: 1 },
+        type: "geojson",
+        id: "mean-trend",
+        data: {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              properties: { mean_trend_K_per_decade: +mean.toFixed(3), color: trendColor(mean) },
+              geometry: area.geometry,
+            },
+          ],
+        },
       };
+    }
     case "stations":
       return { type: "geojson", id: "stations", data: { type: "FeatureCollection", features: stations(ring) } };
     case "lst":
@@ -72,21 +81,21 @@ function trendColor(v: number): string {
 const syntheticTrend = (lng: number, lat: number) =>
   0.8 * Math.sin((lng * Math.PI) / 25) * Math.cos((lat * Math.PI) / 30) + 0.2 * Math.sin(lat / 7);
 
-/** Regular sample grid over the area's bounding box, like gridded satellite products. */
-function trendSamples(ring: Position[]): Feature<Point>[] {
+/** Mean of the synthetic trend over sample points inside the area. */
+function meanTrend(ring: Position[]): number {
   const { w, e, s, n } = extent(ring);
-  const step = Math.max(e - w, n - s) / 12;
-  const out: Feature<Point>[] = [];
-  for (let x = w + step / 2; x < e + step; x += step) {
-    for (let y = s + step / 2; y < n + step; y += step) {
-      out.push({
-        type: "Feature",
-        properties: { trend_K_per_decade: +syntheticTrend(x, y).toFixed(3) },
-        geometry: { type: "Point", coordinates: [x, y] },
-      });
+  const steps = 20;
+  let sum = 0;
+  let count = 0;
+  for (let i = 0; i < steps; i++) {
+    for (let j = 0; j < steps; j++) {
+      const p: Position = [w + ((i + 0.5) * (e - w)) / steps, s + ((j + 0.5) * (n - s)) / steps];
+      if (!inside(p, ring)) continue;
+      sum += syntheticTrend(p[0], p[1]);
+      count++;
     }
   }
-  return out;
+  return count > 0 ? sum / count : 0;
 }
 
 function stations(ring: Position[]): Feature[] {

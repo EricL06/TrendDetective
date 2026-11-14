@@ -1,5 +1,5 @@
 // Demo host page: plays the role of the "Hauptfrontend" and wires the widget to a simulated Data Loader.
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { MapWidget, type AreaFeature, type MapData, type MapWidgetHandle } from "../widget";
 import { MOCK_DATASETS, mockLoadData, type MockDataset } from "./mockDataLoader";
 import "./App.css";
@@ -22,15 +22,6 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [log, setLog] = useState<string[]>([]);
   const requestId = useRef(0);
-  const [showMesh, setShowMesh] = useState(true);
-  const [baseCells, setBaseCells] = useState(16);
-  const [borderRefinement, setBorderRefinement] = useState(3);
-
-  // Mesh settings are display options: apply them to field results without reloading data.
-  const displayed = useMemo<MapData | undefined>(
-    () => (result?.type === "field" ? { ...result, showMesh, mesh: { baseCells, borderRefinement } } : result),
-    [result, showMesh, baseCells, borderRefinement],
-  );
 
   const addLog = (msg: string) =>
     setLog((l) => [`${new Date().toLocaleTimeString()}  ${msg}`, ...l].slice(0, 30));
@@ -71,7 +62,7 @@ export default function App() {
               setLoading(false);
               addLog("onAreaCleared");
             }}
-            resultData={displayed}
+            resultData={result}
             loading={loading}
           />
         </section>
@@ -94,29 +85,6 @@ export default function App() {
               ))}
             </select>
           </label>
-          {result?.type === "field" && (
-            <fieldset className="demo-mesh">
-              <legend>Triangle mesh</legend>
-              <label>
-                Base cells: {baseCells}
-                <input type="range" min={4} max={40} value={baseCells} onChange={(e) => setBaseCells(+e.target.value)} />
-              </label>
-              <label>
-                Border refinement levels: {borderRefinement}
-                <input
-                  type="range"
-                  min={0}
-                  max={6}
-                  value={borderRefinement}
-                  onChange={(e) => setBorderRefinement(+e.target.value)}
-                />
-              </label>
-              <label className="demo-check">
-                <input type="checkbox" checked={showMesh} onChange={(e) => setShowMesh(e.target.checked)} />
-                Show triangle edges
-              </label>
-            </fieldset>
-          )}
           <div className="demo-actions">
             <button
               type="button"

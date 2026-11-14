@@ -1,5 +1,4 @@
-import type { Feature, FeatureCollection, Point, Polygon } from "geojson";
-import type { MeshOptions } from "./mesh";
+import type { Feature, FeatureCollection, Polygon } from "geojson";
 import type { StyleSpecification } from "maplibre-gl";
 import type { CSSProperties } from "react";
 
@@ -70,28 +69,7 @@ export interface ImageMapData extends MapDataBase {
   bounds: BBox;
 }
 
-/**
- * A scalar field (e.g. a trend per location) drawn as a coloured triangle mesh that fills
- * `area` exactly. The mesh is refined along the area border; each triangle gets the value
- * interpolated (inverse distance weighting) from `samples` at its centroid.
- */
-export interface FieldMapData extends MapDataBase {
-  type: "field";
-  /** Point samples, e.g. grid-cell centres. Each needs a numeric `properties[valueProperty]`. */
-  samples: FeatureCollection<Point>;
-  /** Property holding the value. Default "value". */
-  valueProperty?: string;
-  /** Polygon to fill. Default: the current selection. */
-  area?: Feature<Polygon>;
-  /** Colours spread evenly from `min` to `max` (defaults: data min/max, blue–white–red). */
-  colorScale?: { min?: number; max?: number; colors?: string[] };
-  /** Mesh resolution. */
-  mesh?: MeshOptions;
-  /** Draw the triangle edges (to inspect the mesh). */
-  showMesh?: boolean;
-}
-
-export type MapData = GeoJsonMapData | RasterMapData | ImageMapData | FieldMapData;
+export type MapData = GeoJsonMapData | RasterMapData | ImageMapData;
 
 export type ProjectionType = "globe" | "mercator";
 

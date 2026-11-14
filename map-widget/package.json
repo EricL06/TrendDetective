@@ -10,7 +10,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "earcut": "^3.2.4",
     "maplibre-gl": "^6.18.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",

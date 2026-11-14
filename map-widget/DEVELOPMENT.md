@@ -11,7 +11,7 @@ For embedding the widget in the website, see [API.md](API.md).
 - It draws the Data Loader's results on the same map.
 - It knows nothing about NASA APIs or the rest of the website. Everything goes through props and callbacks.
 - Based on the team spec "Technische Spezifikation – Interactive Map Widget". We extended it with
-  the `image` and `field` data types, `onAreaCleared`, a `ref` handle, and extra area properties.
+  the `image` data type, `onAreaCleared`, a `ref` handle, and extra area properties.
 
 ## 2. Commands
 
@@ -35,7 +35,6 @@ There are no automated tests yet. Checks are done by hand in the demo (see §11)
 | `maplibre-gl` | 6.18 | Map engine: globe/mercator, sources, layers, popups |
 | `terra-draw` | 1.39 | Drawing and editing shapes |
 | `terra-draw-maplibre-gl-adapter` | 1.5 | Connects Terra Draw to MapLibre |
-| `earcut` | 3.2 | Polygon → triangles (border cells of the mesh) |
 | `vite` | 8.3 | Dev server and build |
 | `typescript` | 7.0 | Types (`erasableSyntaxOnly`: no `enum`, no constructor parameter properties) |
 | `@types/geojson` | – | GeoJSON types |
@@ -51,8 +50,8 @@ map-widget/
 ├── src/
 │   ├── main.tsx           mounts the demo
 │   ├── demo/              demo host page ("Hauptfrontend" stand-in)
-│   │   ├── App.tsx        wires widget ↔ mock loader, mesh sliders, event log
-│   │   └── mockDataLoader.ts  fake Data Loader: field / stations / MODIS raster
+│   │   ├── App.tsx        wires widget ↔ mock loader, event log
+│   │   └── mockDataLoader.ts  fake Data Loader: mean-trend fill / stations / MODIS raster
 │   └── widget/            THE WIDGET — self-contained, no imports from outside
 │       ├── index.ts       public exports
 │       ├── types.ts       all public types (props, AreaFeature, MapData…)
@@ -60,8 +59,7 @@ map-widget/
 │       ├── MapWidget.css  styles, all scoped under .mw-root
 │       ├── MapEngine.ts   MapLibre: map, controls, basemap, projection, camera
 │       ├── SelectionManager.ts  Terra Draw: tools, editing, single selection, export
-│       ├── DataRenderer.ts      result layers: geojson / field / raster / image, popups
-│       ├── mesh.ts        border-refined triangle mesh + IDW interpolation
+│       ├── DataRenderer.ts      result layers: geojson / raster / image, popups
 │       ├── geo.ts         ring normalisation, antimeridian, area, split
 │       └── basemaps.ts    basemap presets
 ```
@@ -158,39 +156,22 @@ Polygon and freehand reject self-intersecting shapes (`ValidateNotSelfIntersecti
 - **geojson**: three layers (fill / line / circle) filtered by geometry type. Colour = `properties.color`, or blue if missing.
 - **raster**: raster source. `bounds` limits which tiles are **requested**; it does not cut tiles at the box edge. Antimeridian bounds get +360 on east.
 - **image**: image source stretched over the four corners. The image must be in Web Mercator. EPSG:4326 images drift in latitude over large areas.
-- **field**: see §9. Fill layer with `fill-antialias: false` (otherwise thin seams show between triangles), plus an optional edge layer (`showMesh`).
-- **Popups**: click on geojson or field features in the `select` tool → table of properties (except `color`). They are off while a drawing tool is active.
+- **Popups**: click on geojson features in the `select` tool → table of properties (except `color`). They are off while a drawing tool is active.
 
-## 9. Triangle mesh (`mesh.ts`)
+## 9. Area colouring (no mesh)
 
-Used for `field` data. Goal: fill the selected polygon **exactly**, with small triangles only where the border is.
-
-**Algorithm (`triangulateArea`)**:
-1. Project the ring to Web Mercator: `x = lng`, `y = mercator(lat)` in degree units, latitude clamped to ±85.05°. MapLibre draws polygon edges straight in this space, so the mesh border matches the drawn selection border even for very large areas.
-2. Split the bounding box into square base cells, `baseCells` (default 16) along the longer side.
-3. For each cell (quadtree recursion), find the polygon edges that touch it (Liang–Barsky segment/rectangle test). Only the parent cell's edges are checked.
-   - **No edge touches it** → it is entirely inside or outside. Test the centre (point in polygon); if inside, emit 2 triangles. The diagonal alternates in a checkerboard pattern.
-   - **An edge touches it and level < `borderRefinement`** (default 3) → split into 4 and recurse.
-   - **At the finest level** → clip the polygon to the cell (Sutherland–Hodgman; exact because the cell is convex) and triangulate the result with `earcut`. Slivers with near-zero area are dropped.
-4. Convert back to lng/lat. Each triangle has `ring`, `centroid` and `level`.
-
-**Properties**:
-- The triangles' total area equals the polygon's to about 1e-15 relative error. Checked on concave, star-shaped and antimeridian-crossing polygons.
-- Cells of different levels meet with **hanging nodes**: a triangle corner sits on a neighbour's edge without being shared. That's fine for flat per-triangle colour. It must be fixed (conforming mesh) before any smooth shading or FEM-style use.
-- Cost: defaults ~3,000 triangles in ~3 ms; 16/5 ~10,000 in ~10 ms; 40/6 ~52,000 in ~40 ms.
-
-**Values (`idwValue`)**:
-- Inverse distance weighting, power 2, over **all** samples, evaluated at each triangle centroid.
-- Distance in degrees with longitude scaled by `cos(lat)`. The longitude difference is wrapped, so samples on either side of 180° work.
-- Cost grows with triangles × samples. Thousands of samples combined with a fine mesh can get slow. If so, use a spatial index or k-nearest neighbours.
-- IDW makes "bullseye" spots around sparse samples. For regular grids, bilinear interpolation from the grid would be better (not implemented).
-
-**Colours**: a MapLibre `interpolate` expression on the value property. Colour stops are spread evenly between `min` and `max`. Default `min`/`max` = sample range; default colours = 5-step blue–white–red.
+- The area is coloured with plain `geojson` data: the Data Loader sends the selected polygon
+  (`area.geometry`) with `properties.color`, and it is drawn as one fill with one colour.
+- The demo's "Mean trend" dataset does this: it averages a synthetic trend over points inside the
+  area and maps it blue–white–red (`trendColor` in `mockDataLoader.ts`).
+- A triangle-mesh fill with border refinement was tried and removed (commit `a27a2ee`, reverted
+  afterwards) because the refinement didn't behave as wanted. Use that commit as a starting point
+  if it comes back.
 
 ## 10. Styling / UI
 
 - All CSS is scoped under `.mw-root`, plus `.mw-popup` for popups. Accent colour `#ff6b2c`.
-- The selection fill is very light (6 % while drawing, 5 % when selected), so it doesn't tint field colours.
+- The selection fill is very light (6 % while drawing, 5 % when selected), so it doesn't tint the data colours.
 - Toolbar on the left; basemap and projection panel at top left; status line at the bottom (area id, size, hint for the current tool); loading badge at the top.
 - Below 560 px width the panel and status line move so they don't overlap.
 
@@ -204,7 +185,7 @@ Run `npm run dev`, then in the demo:
 4. Trash button → `onAreaCleared`, data disappears.
 5. Switch basemap (Streets → Blue Marble) → the area and data stay.
 6. Globe ↔ Flat; draw across 180° in both → `crossesAntimeridian: true`, `bbox` west > east.
-7. Field data: zoom into the border and check that the triangles end on the orange line. Try the sliders.
+7. Mean trend dataset: the whole area is filled with one colour; clicking it shows the mean value.
 8. MODIS raster and stations datasets load; clicking a feature opens a popup.
 9. `npm run build` and `npx vite preview`: the map loads (worker asset served from `/assets/`).
 
@@ -213,6 +194,5 @@ Run `npm run dev`, then in the demo:
 - The whole widget ships as one ~1.5 MB JS chunk (mostly MapLibre). It could be lazy-loaded by the host.
 - Only one selection at a time. Multiple selections would need `onAreaSelected` to handle a list.
 - An `initialArea` crossing the antimeridian can't be loaded (Terra Draw validation, §7).
-- Mesh: hanging nodes and IDW over all samples (§9).
-- No automated tests. `geo.ts` and `mesh.ts` are pure functions and the easiest place to start (e.g. with Vitest).
+- No automated tests. `geo.ts` is pure functions and is and the easiest place to start (e.g. with Vitest).
 - Raster tiles stick out past `bounds`. Exact clipping would need a mask layer.

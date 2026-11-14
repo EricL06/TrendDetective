@@ -18,7 +18,7 @@ All coordinates are `[longitude, latitude]` in WGS84.
 Copy (or reference) the folder `map-widget/src/widget/` and install its dependencies:
 
 ```bash
-npm install maplibre-gl terra-draw terra-draw-maplibre-gl-adapter earcut
+npm install maplibre-gl terra-draw terra-draw-maplibre-gl-adapter
 ```
 
 The project must use **Vite** (the widget loads a MapLibre file with Vite's `?url` import).
@@ -104,22 +104,6 @@ There is only ever one area at a time.
 
 Pick the type that matches your data.
 
-### Values to fill the area with (recommended for trends) – `field`
-
-Send points with a number; the widget fills the area with coloured triangles.
-
-```ts
-{
-  type: "field",
-  samples: { type: "FeatureCollection", features: [
-    { type: "Feature", properties: { value: 0.42 }, geometry: { type: "Point", coordinates: [6.5, 50.5] } },
-    // … more points, spread over the whole area
-  ] },
-  area,                                   // the AreaFeature you received
-  colorScale: { min: -1, max: 1 },        // optional
-}
-```
-
 ### Points, lines, shapes – `geojson`
 
 ```ts
@@ -127,6 +111,17 @@ Send points with a number; the widget fills the area with coloured triangles.
 ```
 
 Optional `properties.color` per feature (e.g. `"#d7301f"`). Clicking a feature shows its properties.
+
+To colour the whole selected area by one value (e.g. its mean trend), send the area itself:
+
+```ts
+{
+  type: "geojson",
+  data: { type: "FeatureCollection", features: [
+    { type: "Feature", geometry: area.geometry, properties: { mean_trend: 0.42, color: "#ef8a62" } },
+  ] },
+}
+```
 
 ### Map tiles – `raster`
 
