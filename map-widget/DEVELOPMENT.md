@@ -23,9 +23,10 @@ Run these in `map-widget/`:
 | `npm run dev` | Demo at http://localhost:5173 (also startable from the app via `.claude/launch.json`) |
 | `npx tsc -b` | Type check |
 | `npm run lint` | oxlint |
-| `npm run build` | Production build to `dist/` (type check + Vite) |
+| `npm run build` | Production build of the demo to `dist/` (type check + Vite) |
+| `npm run build:embed` | **Website bundle** → `../static/map-widget/` (commit the result!) |
 
-There are no automated tests yet. Checks are done by hand in the demo (see §11).
+There are no automated tests yet. Checks are done by hand in the demo (see §12).
 
 ## 3. Stack
 
@@ -44,11 +45,16 @@ Basemaps need no API key: **OpenFreeMap** (vector styles liberty/positron/dark) 
 ## 4. Folder layout
 
 ```
-map-widget/
+TrendDetective/
+├── app.py, interface.py   Python website server (team), serves index.html and static/
+├── index.html             website; mounts the widget into the map box (.map-box)
+├── static/map-widget/     built widget bundle (npm run build:embed) — generated, but committed
+└── map-widget/
 ├── API.md                 integration guide (for the website team)
 ├── DEVELOPMENT.md         this file
 ├── src/
 │   ├── main.tsx           mounts the demo
+│   ├── embed.tsx          website entry: window.TrendDetectiveMap.mount(el, options)
 │   ├── demo/              demo host page ("Hauptfrontend" stand-in)
 │   │   ├── App.tsx        wires widget ↔ mock loader, event log
 │   │   └── mockDataLoader.ts  fake Data Loader: mean-trend fill / stations / MODIS raster
@@ -66,7 +72,27 @@ map-widget/
 
 Rule: `src/widget/` must never import from `src/demo/` or the website.
 
-## 5. Architecture
+## 5. Website integration
+
+- The website is plain HTML + Python (`http.server`), no React and no build step. It loads
+  `static/map-widget/map-widget.{js,css}`, built from `src/embed.tsx` by `vite.embed.config.ts`.
+- The bundle contains React, MapLibre, Terra Draw and the widget (~1.5 MB, ~400 KB gzipped). The
+  MapLibre worker is a separate file (`maplibre-gl-worker.mjs`), found relative to `map-widget.js`
+  (`base: './'`), so the folder can be served from any path.
+- `embed.tsx` renders a small `Host` component that keeps `resultData`/`loading` in React state, so
+  plain JS can update them through the controller (`setResultData`, `setLoading`, …).
+- `index.html` keeps the selected area in `selectedArea` and adds it as `area` to the Apply POST.
+  `app.py` passes it to `AppInterface.set_request_inputs(..., area=...)` and it is stored in
+  `UserRequest.area` (GeoJSON dict or `None`; optional, old requests without it still work).
+- **`app.py` must use `ThreadingHTTPServer`.** With the single-threaded `HTTPServer` the map never
+  loads: browsers open spare connections in advance, an idle one blocks the server, and the
+  parallel worker requests hang (globe stays blank, no error).
+- The box: `.map-box` (relative, `min-height: 480px`) with `#map-widget` absolutely filling it.
+  `.main-content` needs `min-width: 0`, otherwise the map canvas squeezes the sidebar.
+- **Remember**: after changing anything in `src/widget/`, run `npm run build:embed` and commit
+  `static/map-widget/`, otherwise the website keeps the old version.
+
+## 6. Architecture
 
 ```
 MapWidget.tsx (React)
@@ -100,7 +126,7 @@ The three modules don't know about each other. `MapWidget` connects them with ca
 - Callbacks are read from `propsRef`, so changing them doesn't rebuild the map.
 - `initialArea` is read only once.
 
-## 6. MapEngine
+## 7. MapEngine
 
 - Creates the map with center `[10, 25]`, zoom 1.4, `renderWorldCopies: true`, compact attribution, navigation control (top right) and scale bar (bottom left).
 - **Worker fix**: MapLibre v6 loads its worker from a separate file found relative to `import.meta.url`. Vite's dependency pre-bundling breaks that path ("Worker failed to load"). We import `maplibre-gl/dist/maplibre-gl-worker.mjs?url` and call `setWorkerUrl()`. This works in dev and production. A non-Vite bundler needs its own asset import here.
@@ -108,7 +134,7 @@ The three modules don't know about each other. `MapWidget` connects them with ca
 - `fitToBBox` handles `west > east` by adding 360 to east.
 - `firstBasemapSymbolLayerId` finds the first label layer of the basemap, so data can go below labels.
 
-## 7. SelectionManager (Terra Draw)
+## 8. SelectionManager (Terra Draw)
 
 ### Tools and modes
 | Tool | Terra Draw mode | Interaction |
@@ -148,7 +174,7 @@ Polygon and freehand reject self-intersecting shapes (`ValidateNotSelfIntersecti
 - The exported ring therefore stays **continuous** (values like −197.9 can appear). `splitAtAntimeridian()` in `geo.ts` cuts it into a MultiPolygon within ±180 for consumers that need that.
 - Terra Draw's `addFeatures` validation rejects longitudes outside ±180. So an `initialArea` that crosses 180° in continuous form can't be loaded (a warning is logged). Drawing interactively works.
 
-## 8. DataRenderer
+## 9. DataRenderer
 
 - Layer and source ids: `mw-data-<index>-<id|type>-<suffix>`. The selection uses `mw-sel-*`. Host styles must not use these prefixes.
 - **Order**: data goes below the first basemap label layer if there is one, otherwise below the selection layer. The selection is always on top.
@@ -158,7 +184,7 @@ Polygon and freehand reject self-intersecting shapes (`ValidateNotSelfIntersecti
 - **image**: image source stretched over the four corners. The image must be in Web Mercator. EPSG:4326 images drift in latitude over large areas.
 - **Popups**: click on geojson features in the `select` tool → table of properties (except `color`). They are off while a drawing tool is active.
 
-## 9. Area colouring (no mesh)
+## 10. Area colouring (no mesh)
 
 - The area is coloured with plain `geojson` data: the Data Loader sends the selected polygon
   (`area.geometry`) with `properties.color`, and it is drawn as one fill with one colour.
@@ -168,14 +194,14 @@ Polygon and freehand reject self-intersecting shapes (`ValidateNotSelfIntersecti
   afterwards) because the refinement didn't behave as wanted. Use that commit as a starting point
   if it comes back.
 
-## 10. Styling / UI
+## 11. Styling / UI
 
 - All CSS is scoped under `.mw-root`, plus `.mw-popup` for popups. Accent colour `#ff6b2c`.
 - The selection fill is very light (6 % while drawing, 5 % when selected), so it doesn't tint the data colours.
 - Toolbar on the left; basemap and projection panel at top left; status line at the bottom (area id, size, hint for the current tool); loading badge at the top.
 - Below 560 px width the panel and status line move so they don't overlap.
 
-## 11. Manual test checklist
+## 12. Manual test checklist
 
 Run `npm run dev`, then in the demo:
 
@@ -187,12 +213,13 @@ Run `npm run dev`, then in the demo:
 6. Globe ↔ Flat; draw across 180° in both → `crossesAntimeridian: true`, `bbox` west > east.
 7. Mean trend dataset: the whole area is filled with one colour; clicking it shows the mean value.
 8. MODIS raster and stations datasets load; clicking a feature opens a popup.
-9. `npm run build` and `npx vite preview`: the map loads (worker asset served from `/assets/`).
+9. `npm run build:embed`, then `python3 app.py` and open http://127.0.0.1:8000: the globe renders in
+   the map box; draw an area, fill the sidebar, click Apply → the status card shows `area=area-…`.
 
-## 12. Known limitations / ideas
+## 13. Known limitations / ideas
 
 - The whole widget ships as one ~1.5 MB JS chunk (mostly MapLibre). It could be lazy-loaded by the host.
 - Only one selection at a time. Multiple selections would need `onAreaSelected` to handle a list.
-- An `initialArea` crossing the antimeridian can't be loaded (Terra Draw validation, §7).
+- An `initialArea` crossing the antimeridian can't be loaded (Terra Draw validation, §8).
 - No automated tests. `geo.ts` is pure functions and is and the easiest place to start (e.g. with Vitest).
 - Raster tiles stick out past `bounds`. Exact clipping would need a mask layer.

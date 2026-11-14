@@ -15,51 +15,61 @@ All coordinates are `[longitude, latitude]` in WGS84.
 
 ## 1. Add it to the website
 
-Copy (or reference) the folder `map-widget/src/widget/` and install its dependencies:
+The website (`index.html`, served by `python3 app.py`) uses the **pre-built bundle** in
+`static/map-widget/`. It contains React, MapLibre and the widget, so the page needs no Node or build step.
+
+```html
+<link rel="stylesheet" href="/static/map-widget/map-widget.css">
+<script type="module" src="/static/map-widget/map-widget.js"></script>
+<script type="module">
+  const map = window.TrendDetectiveMap.mount(document.getElementById("map-widget"), {
+    onAreaSelected: (area) => { /* send area to the Data Loader */ },
+    onAreaCleared: () => { /* forget the area */ },
+  });
+
+  // later, when data arrives:
+  map.setLoading(true);
+  map.setResultData(data);   // see §4
+  map.setLoading(false);
+</script>
+```
+
+The element you mount into must have a size (the widget fills it).
+This is already set up in `index.html` (box `.map-box`); the area is sent to Python with **Apply**
+and ends up in `UserRequest.area`.
+
+`mount(element, options)` returns a controller:
+
+| Method | What it does |
+|---|---|
+| `setResultData(data)` | Show data (§4); `undefined` clears it |
+| `setLoading(bool)` | Show / hide "Loading data…" |
+| `getArea()` | Current area (§3) or `null` |
+| `clearArea()` | Remove the area |
+| `fitToArea()` | Zoom to the area |
+| `destroy()` | Remove the widget |
+
+**After changing widget code**, rebuild the bundle and commit `static/map-widget/`:
 
 ```bash
-npm install maplibre-gl terra-draw terra-draw-maplibre-gl-adapter
+cd map-widget && npm install && npm run build:embed
 ```
 
-The project must use **Vite** (the widget loads a MapLibre file with Vite's `?url` import).
-
-```tsx
-import { useState } from "react";
-import { MapWidget, type AreaFeature, type MapData } from "./widget";
-
-export function MapSection() {
-  const [data, setData] = useState<MapData>();
-  const [loading, setLoading] = useState(false);
-
-  return (
-    <div style={{ height: 600 }}>                 {/* the widget fills its parent: give it a height */}
-      <MapWidget
-        onAreaSelected={async (area: AreaFeature) => {
-          setLoading(true);
-          setData(await dataLoader.load(area));  // ← your Data Loader
-          setLoading(false);
-        }}
-        onAreaCleared={() => setData(undefined)}
-        resultData={data}
-        loading={loading}
-      />
-    </div>
-  );
-}
-```
-
-A working example: [`src/demo/App.tsx`](src/demo/App.tsx).
+**In a React app** you can use the component directly instead: copy `map-widget/src/widget/`,
+`npm install maplibre-gl terra-draw terra-draw-maplibre-gl-adapter`, and render
+`<MapWidget onAreaSelected={…} resultData={…} loading={…} />` inside an element with a height
+(example: [`src/demo/App.tsx`](src/demo/App.tsx)). This needs Vite.
 
 ---
 
-## 2. What the widget needs (props)
+## 2. What the widget needs (options / props)
 
 | Prop | Type | Required | What it is |
 |---|---|---|---|
-| `onAreaSelected` | `(area: AreaFeature) => void` | **yes** | Called when the user finishes drawing or editing an area. |
+| `onAreaSelected` | `(area: AreaFeature) => void` | **yes** (React) | Called when the user finishes drawing or editing an area. |
 | `onAreaCleared` | `() => void` | no | Called when the user deletes the area. |
-| `resultData` | `MapData` or `MapData[]` | no | The data to show (see §4). `undefined` = show nothing. |
-| `loading` | `boolean` | no | Shows "Loading data…" while `true`. |
+| `resultData` | `MapData` or `MapData[]` | no | React only (bundle: `setResultData`). The data to show (§4). |
+| `loading` | `boolean` | no | React only (bundle: `setLoading`). Shows "Loading data…". |
 | `initialArea` | GeoJSON polygon feature | no | An area to show when the page opens. |
 | `basemap` | `"streets"`, `"light"`, `"dark"`, `"satellite"` | no | Start map. Default `"streets"`. |
 | `projection` | `"globe"` or `"mercator"` | no | Start view. Default `"globe"`. |
@@ -144,7 +154,7 @@ Several layers at once: pass an array, e.g. `resultData={[rasterLayer, stationPo
 
 ---
 
-## 5. Optional: control it from your page
+## 5. Optional (React): control it from your page
 
 ```tsx
 const ref = useRef<MapWidgetHandle>(null);
