@@ -20,9 +20,14 @@ import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterator
 
 import requests
+
+try:
+    import ijson
+except ImportError:
+    ijson = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
     from api_wrapper import PointDataRequest
@@ -77,18 +82,18 @@ def _as_number(value: Any) -> float | int | str | None:
     return str(value)
 
 
-def _normalize_observations(payload: Any) -> list[dict[str, Any]]:
-    """Expand each raw NCEI row into one record per measured variable.
+def _normalize_observations(payload: Any) -> list[list[dict[str, Any]]]:
+    """Group observations into one record collection per measured variable.
 
-    Every output record contains the six normalized station metadata fields,
-    plus a numeric ``value`` when NOAA provides a numeric value and lowercase
-    variable ``description``. Empty measurements are omitted; non-numeric text
-    is preserved as text.
+    The result is a list of collections, one for each measured variable. Every
+    record contains the six normalized station metadata fields, plus a numeric
+    ``value`` when NOAA provides one and lowercase variable ``description``.
+    Empty measurements are omitted; non-numeric text is preserved as text.
 
     :param payload: JSON-decoded NCEI response, normally a list of row dicts.
     :type payload: typing.Any
-    :returns: Expanded observation records.
-    :rtype: list[dict[str, typing.Any]]
+    :returns: One list of observation records per measured variable.
+    :rtype: list[list[dict[str, typing.Any]]]
     :raises NOAAError: If the response is not a list of object rows.
     """
     if not isinstance(payload, list) or any(
@@ -96,7 +101,7 @@ def _normalize_observations(payload: Any) -> list[dict[str, Any]]:
     ):
         raise NOAAError("NOAA NCEI returned an unexpected observation format")
 
-    normalized: list[dict[str, Any]] = []
+    collections_by_description: dict[str, list[dict[str, Any]]] = {}
     for row in payload:
         values_by_lowercase_name: dict[str, Any] = {
             str(key).lower(): value for key, value in row.items()
@@ -114,11 +119,11 @@ def _normalize_observations(payload: Any) -> list[dict[str, Any]]:
                 continue
             value: float | int | str | None = _as_number(raw_value)
             if value is not None:
-                normalized.append(
+                collections_by_description.setdefault(description, []).append(
                     {**metadata, "value": value, "description": description}
                 )
 
-    return normalized
+    return list(collections_by_description.values())
 
 
 @dataclass(frozen=True)
@@ -383,17 +388,17 @@ class NOAAClient:
         *,
         request: PointDataRequest,
         output_dir: str | Path = "data/noaa",
-    ) -> list[Path]:
-        """Download JSON observations from the closest matching nearby station.
+    ) -> list[Iterator[dict[str, Any]]]:
+        """Fetch grouped observations and return lazy file-backed iterators.
 
         :param request: Point, topic and inclusive date range to retrieve.
         :type request: PointDataRequest
         :param output_dir: Directory where the JSON response will be saved.
         :type output_dir: str or pathlib.Path
-        :returns: One path to a JSON file containing one entry per
-            measurement, with normalized metadata, numeric ``value``, and
-            lowercase variable ``description``.
-        :rtype: list[pathlib.Path]
+        :returns: One iterator per measurement variable. Each iterator yields
+            normalized records with numeric ``value`` and lowercase
+            ``description`` from the saved JSON file.
+        :rtype: list[typing.Iterator[dict[str, typing.Any]]]
         :raises ValueError: If the requested topic is not in :data:`TOPICS`.
         :raises NOAAError: If the service returns an HTTP error or invalid JSON.
         """
@@ -439,7 +444,7 @@ class NOAAClient:
             "units": "metric",
         }
         raw_payload: Any = self._get_json(BASE_URL, data_params)
-        payload: list[dict[str, Any]] = _normalize_observations(raw_payload)
+        payload: list[list[dict[str, Any]]] = _normalize_observations(raw_payload)
 
         destination: Path = Path(output_dir)
         destination.mkdir(parents=True, exist_ok=True)
@@ -453,7 +458,41 @@ class NOAAClient:
         with path.open("w", encoding="utf-8") as output_file:
             json.dump(payload, output_file, ensure_ascii=False, indent=2)
             output_file.write("\n")
-        return [path]
+        descriptions: list[str] = [
+            collection[0]["description"] for collection in payload if collection
+        ]
+        return [
+            self._iter_measurements(path, description)
+            for description in descriptions
+        ]
+
+    @staticmethod
+    def _iter_measurements(
+        path: Path,
+        description: str,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield records for one variable by streaming the saved JSON file.
+
+        The file is parsed incrementally and filtered by ``description``;
+        record collections are not loaded into memory by this iterator.
+
+        :param path: JSON file containing nested measurement collections.
+        :type path: pathlib.Path
+        :param description: Lowercase variable name to select.
+        :type description: str
+        :yields: Individual normalized observation records.
+        :ytype: dict[str, typing.Any]
+        """
+        if ijson is None:
+            raise NOAAError(
+                "The streaming JSON dependency 'ijson' is missing. Install it "
+                "with 'python -m pip install -r requirements.txt'."
+            )
+        with path.open("rb") as input_file:
+            record: dict[str, Any]
+            for record in ijson.items(input_file, "item.item", use_float=True):
+                if record.get("description") == description:
+                    yield record
 
     def _get_json(self, url: str, params: dict[str, str]) -> Any:
         """Request an NCEI endpoint and decode its JSON response.
