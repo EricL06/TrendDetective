@@ -115,6 +115,12 @@ _FALLING = "#2563eb"
 _FALLING_WEAK = "#93c5fd"
 _FLAT = "#94a3b8"
 
+HULL_BORDER_KM: float = 5.0
+"""Margin drawn around the outermost stations of an area result."""
+
+_HULL_CIRCLE_POINTS: int = 24
+"""Corners of the circle around each station; the hull of all circles is rounded."""
+
 
 def list_regions() -> list[dict[str, Any]]:
     """All regions as JSON-friendly dicts."""
@@ -276,6 +282,55 @@ def _station_colour(trend: dict[str, Any]) -> str:
     return _FALLING if trend.get("significant") else _FALLING_WEAK
 
 
+def _convex_hull(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Convex hull, counter-clockwise, without repeating the first point (monotone chain)."""
+    unique = sorted(set(points))
+    if len(unique) < 3:
+        return unique
+
+    def cross(o: tuple[float, float], a: tuple[float, float], b: tuple[float, float]) -> float:
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower: list[tuple[float, float]] = []
+    for point in unique:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0:
+            lower.pop()
+        lower.append(point)
+    upper: list[tuple[float, float]] = []
+    for point in reversed(unique):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0:
+            upper.pop()
+        upper.append(point)
+    return lower[:-1] + upper[:-1]
+
+
+def _station_hull(stations: list[dict[str, Any]], region: Region) -> dict[str, Any]:
+    """Polygon around the stations used for an area result, with a border.
+
+    Each station is replaced by a circle of :data:`HULL_BORDER_KM` and the
+    convex hull of all circles is returned, so the outline keeps the same
+    distance to the outermost stations and its corners are rounded. Without
+    station positions the region's box is returned.
+    """
+    circle: list[tuple[float, float]] = []
+    for feature in stations:
+        longitude, latitude = feature["geometry"]["coordinates"][:2]
+        degrees_latitude = HULL_BORDER_KM / 111.32
+        degrees_longitude = degrees_latitude / max(math.cos(math.radians(latitude)), 0.01)
+        for k in range(_HULL_CIRCLE_POINTS):
+            angle = 2 * math.pi * k / _HULL_CIRCLE_POINTS
+            circle.append((
+                round(longitude + degrees_longitude * math.cos(angle), 5),
+                round(latitude + degrees_latitude * math.sin(angle), 5),
+            ))
+    hull = _convex_hull(circle)
+    if len(hull) < 3:
+        west, south, east, north = region.bbox
+        hull = [(west, south), (east, south), (east, north), (west, north)]
+    ring = [[x, y] for x, y in hull]
+    return {"type": "Polygon", "coordinates": [ring + [ring[0]]]}
+
+
 def _error_result(region: Region, message: str) -> dict[str, Any]:
     west, south, east, north = region.bbox
     return {
@@ -422,7 +477,8 @@ def process_region_request(user_request: Any, region: Region) -> dict[str, Any]:
     :param region: Region picked on the map.
     :return: ``{"topics": {topic: result}, "map_layers": [...]}``. Each topic
         result carries the region's mean series, ``region`` and
-        ``station_count``; the map layers are the region outline coloured by
+        ``station_count``; the map layers are the outline around the stations
+        used (convex hull with a border, see :func:`_station_hull`) coloured by
         the area trend and one dot per station coloured by its own trend.
     """
     topics = [topic for topic, checked in user_request.topics.items() if checked]
@@ -456,16 +512,7 @@ def process_region_request(user_request: Any, region: Region) -> dict[str, Any]:
                 outline_features.append(
                     {
                         "type": "Feature",
-                        "geometry": {
-                            "type": "Polygon",
-                            "coordinates": [[
-                                [region.bbox[0], region.bbox[1]],
-                                [region.bbox[2], region.bbox[1]],
-                                [region.bbox[2], region.bbox[3]],
-                                [region.bbox[0], region.bbox[3]],
-                                [region.bbox[0], region.bbox[1]],
-                            ]],
-                        },
+                        "geometry": _station_hull(stations, region),
                         "properties": {
                             "topic": result_key,
                             "region": region.name,
