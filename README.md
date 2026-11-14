@@ -8,9 +8,16 @@ Be An Earth System Trend Detective!
 python3 app.py
 ```
 
-Open http://127.0.0.1:8000. Choose a timestamp, an interval and topics in the sidebar, draw an
-area on the world map (or pick a single point with the 📍 tool), and click **Apply**.
-To move or reshape a selection, switch on **Edit** in the map toolbar first.
+Open http://127.0.0.1:8000. Choose a time frame, an interval and topics in the sidebar, pick a
+point on the world map with the 📍 tool (or one of the predefined regions with **Areas**), and
+click **Apply**. To move a point, switch on **Edit** in the map toolbar first.
+
+When a result card has no values (for example because the stations nearby stopped reporting
+before the chosen time frame), the card shows when the stations around the point or in the
+region do have data: stations per year, the longest-running stations, and a button that fills in
+a time frame with data. This comes from the station metadata of the NOAA Search Service
+(`POST /api/coverage`, see [`station_coverage.py`](station_coverage.py)); no observations are
+downloaded for it.
 
 ## Map widget
 

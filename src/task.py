@@ -354,7 +354,12 @@ def _load_records_for_topic(
     start_date: date,
     end_date: date,
 ) -> list[dict[str, Any]]:
-    """Fetch NOAA observations and consume its file-backed iterators."""
+    """Fetch the nearest station's observations from all data sources of the topic.
+
+    See :func:`api_wrapper.fetch_data_single_topic_nearest_station`: NOAA and
+    the national networks (DWD, ECCC, FMI) are asked in parallel and the
+    station closest to the point wins.
+    """
     request = api_wrapper.PointDataRequest(
         latitude=latitude,
         longitude=longitude,
@@ -364,8 +369,8 @@ def _load_records_for_topic(
     )
     records: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="trend-detective-") as output_dir:
-        collections = api_wrapper.fetch_data_single_topic_single_coordinate(
-            request, provider="noaa", output_dir=output_dir
+        collections = api_wrapper.fetch_data_single_topic_nearest_station(
+            request, output_dir=output_dir
         )
         for collection in collections:
             records.extend(record for record in collection if isinstance(record, dict))
@@ -390,6 +395,8 @@ VARIABLE_NAMES: dict[str, str] = {
     "air_temp": "air",
     "sea_surf_temp": "sea surface",
     "dew_pt_temp": "dew point",
+    "wsfg": "peak gust",
+    "viirs_ice_thickness": "ice thickness",
 }
 """Readable names of common NOAA codes, used in the per-variable result keys."""
 
@@ -542,6 +549,7 @@ def _station_from_records(
         "latitude": round(station_latitude, 5),
         "longitude": round(station_longitude, 5),
         "elevation": elevation if isinstance(elevation, (int, float)) else None,
+        "source": first.get("source", "NOAA"),
         "distance_km": round(
             _distance_km(latitude, longitude, station_latitude, station_longitude), 1
         ),
@@ -622,6 +630,7 @@ def process_user_request(user_request: Any) -> dict[str, Any]:
                             "longitude": station["longitude"],
                             "elevation_m": station["elevation"],
                             "distance_km": station["distance_km"],
+                            "source": station["source"],
                             "topics": [],
                             "color": "#7c3aed",
                         },

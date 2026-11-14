@@ -274,6 +274,41 @@
             padding: 4px 8px;
             margin: 6px 0;
         }
+        .coverage-box {
+            font-size: 0.8rem;
+            color: #334155;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 6px 8px;
+            margin: 6px 0;
+        }
+        .coverage-box.coverage-muted { color: #64748b; }
+        .coverage-title { font-weight: 600; margin-bottom: 4px; }
+        .coverage-code { margin-top: 6px; }
+        .coverage-code-head { display: flex; flex-wrap: wrap; gap: 0 8px; align-items: baseline; }
+        .coverage-code-head .muted { color: #64748b; }
+        .coverage-bars { display: block; width: 100%; height: 34px; margin-top: 3px; }
+        .coverage-bars rect.bar { fill: #0f766e; }
+        .coverage-bars rect.bar:hover { fill: #134e4a; }
+        .coverage-bars rect.request { fill: #fed7aa; }
+        .coverage-bars line.need { stroke: #94a3b8; stroke-width: 1; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; }
+        .coverage-axis { display: flex; justify-content: space-between; color: #64748b; font-size: 0.72rem; }
+        .coverage-legend { color: #64748b; font-size: 0.72rem; margin-top: 2px; }
+        .coverage-legend .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; vertical-align: -1px; margin-right: 3px; }
+        .coverage-stations { margin: 4px 0 0; padding-left: 16px; color: #475569; }
+        .coverage-use {
+            margin-top: 4px;
+            font: inherit;
+            font-size: 0.78rem;
+            padding: 2px 8px;
+            border-radius: 999px;
+            border: 1px solid #0f766e;
+            background: #fff;
+            color: #0f766e;
+            cursor: pointer;
+        }
+        .coverage-use:hover { background: #0f766e; color: #fff; }
         .station-line {
             font-size: 0.8rem;
             color: #5b21b6;
@@ -1170,6 +1205,7 @@
                 host._chartData = { values, trendLine, labels: info.labels, unit: info.unit };
                 if (!hasValues) {
                     host.innerHTML = buildSvgChart([], null, [], null);
+                    loadCoverage(card, topic);
                 } else {
                     chartHosts.push(host);
                 }
@@ -1179,6 +1215,125 @@
                 drawChartInto(host);
                 if (chartResizeObserver) chartResizeObserver.observe(host);
             }
+        }
+
+        // ---- When do the stations here have data? (shown on cards without values) ----
+        let lastRequestContext = null;
+
+        function isoToDdMmYyyy(iso) {
+            const [y, m, d] = String(iso).slice(0, 10).split('-');
+            return `${d}.${m}.${y}`;
+        }
+
+        function yearOf(iso) {
+            return Number(String(iso).slice(0, 4));
+        }
+
+        async function loadCoverage(card, topic) {
+            const ctx = lastRequestContext;
+            if (!ctx || !ctx.area) return;
+            const box = document.createElement('div');
+            box.className = 'coverage-box coverage-muted';
+            box.textContent = 'Looking up when the stations here have data…';
+            card.querySelector('.badge-row').before(box);
+            try {
+                const res = await fetch(`${API_BASE}/api/coverage`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ area: ctx.area, topic, timeintervall: ctx.timeintervall }),
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+                renderCoverage(box, data);
+            } catch (error) {
+                box.textContent = `Could not look up when the stations here have data: ${error.message}`;
+            }
+        }
+
+        // One bar per year: how many stations report the code; the requested time frame is shaded.
+        function buildCoverageBars(code, requested, needed) {
+            let first = code.years[0];
+            let last = code.years[code.years.length - 1];
+            const req = requested ? [yearOf(requested[0]), yearOf(requested[1])] : null;
+            if (req) {
+                first = Math.min(first, req[0]);
+                last = Math.max(last, req[1]);
+            }
+            const span = last - first + 1;
+            const maxCount = Math.max(needed, ...code.counts);
+            const h = 30;
+            const scale = (n) => (n / maxCount) * (h - 2);
+            let svg = `<svg class="coverage-bars" viewBox="0 0 ${span} ${h}" preserveAspectRatio="none" role="img"`
+                + ` aria-label="Stations reporting ${escapeText(code.code)} per year, ${first} to ${last}">`;
+            if (req) {
+                svg += `<rect class="request" x="${req[0] - first}" y="0" width="${req[1] - req[0] + 1}" height="${h}"><title>Your time frame: ${req[0]}–${req[1]}</title></rect>`;
+            }
+            const gap = span > 60 ? 0 : 0.15;
+            code.years.forEach((year, i) => {
+                const n = code.counts[i];
+                if (!n) return;
+                const bh = Math.max(scale(n), 1.5);
+                svg += `<rect class="bar" x="${year - first + gap / 2}" y="${h - bh}" width="${1 - gap}" height="${bh}">`
+                    + `<title>${year}: ${n} station${n === 1 ? '' : 's'}</title></rect>`;
+            });
+            if (needed > 1) {
+                const y = h - scale(needed);
+                svg += `<line class="need" x1="0" x2="${span}" y1="${y}" y2="${y}"><title>${needed} stations needed for an area</title></line>`;
+            }
+            svg += '</svg>';
+            return svg + `<div class="coverage-axis"><span>${first}</span><span>${last}</span></div>`;
+        }
+
+        function renderCoverage(box, data) {
+            box.classList.remove('coverage-muted');
+            const where = data.scope === 'region'
+                ? `in ${escapeText(data.place)}`
+                : `within about ${data.radius_km} km`;
+            if (!data.codes || data.codes.length === 0) {
+                box.classList.add('coverage-muted');
+                box.textContent = data.scope === 'region'
+                    ? `No station in ${data.place} has ever reported this topic.`
+                    : `No station within about ${data.radius_km} km has ever reported this topic. Try another place or topic.`;
+                return;
+            }
+            const reqText = data.requested
+                ? `${yearOf(data.requested[0])}–${yearOf(data.requested[1])}`
+                : null;
+            let html = `<div class="coverage-title">When is there data? Stations ${where}`
+                + `${data.scope === 'region' ? ` (an area needs ${data.needed})` : ''}</div>`;
+            data.codes.forEach((code, index) => {
+                const label = code.name ? `${code.name} (${code.code})` : code.code;
+                const inRange = code.in_range == null || !reqText
+                    ? ''
+                    : ` · <span class="muted">${code.in_range} cover ${reqText}</span>`;
+                html += `<div class="coverage-code">`
+                    + `<div class="coverage-code-head"><strong>${escapeText(label)}</strong>`
+                    + `<span>${yearOf(code.first)}–${yearOf(code.last)} · ${code.station_count} station${code.station_count === 1 ? '' : 's'}${inRange}</span></div>`
+                    + buildCoverageBars(code, data.requested, data.needed);
+                if (index === 0 && code.stations.length) {
+                    html += '<ul class="coverage-stations">' + code.stations.slice(0, 3).map((s) =>
+                        `<li>${escapeText(s.name)}: ${yearOf(s.first)}–${yearOf(s.last)}`
+                        + `${s.distance_km != null ? ` · ${s.distance_km} km` : ''}</li>`).join('') + '</ul>';
+                }
+                if (code.suggestion) {
+                    const [a, b] = code.suggestion;
+                    html += `<button type="button" class="coverage-use" data-start="${isoToDdMmYyyy(a)}" data-end="${isoToDdMmYyyy(b)}">`
+                        + `Use ${isoToDdMmYyyy(a)} – ${isoToDdMmYyyy(b)}</button>`;
+                }
+                html += '</div>';
+            });
+            html += `<div class="coverage-legend"><span class="swatch" style="background:#0f766e"></span>stations reporting per year`
+                + `${reqText ? ` &nbsp;<span class="swatch" style="background:#fed7aa"></span>your time frame` : ''}`
+                + `${data.scope === 'region' ? ' &nbsp;┄ stations needed' : ''}</div>`;
+            box.innerHTML = html;
+            box.querySelectorAll('.coverage-use').forEach((button) => {
+                button.addEventListener('click', () => {
+                    timeintervallStartInput.value = button.dataset.start;
+                    timeintervallEndInput.value = button.dataset.end;
+                    updateApplyButtonState();
+                    timeintervallStartInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                });
+            });
         }
 
         // Zoom so the selected area and every measuring station are visible together;
@@ -1249,6 +1404,8 @@
                     ],
                     area: window.getSelectedArea ? window.getSelectedArea() : null,
                 };
+                // The coverage lookup of empty cards must use what this request was made with.
+                lastRequestContext = { area: payload.area, timeintervall: payload.timeintervall };
 
                 const postRes = await fetch(`${API_BASE}/api/buttons/${encodeURIComponent(buttonId)}`, {
                     method: 'POST',
