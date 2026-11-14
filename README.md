@@ -9,7 +9,8 @@ python3 app.py
 ```
 
 Open http://127.0.0.1:8000. Choose a timestamp, an interval and topics in the sidebar, draw an
-area on the world map, and click **Apply**.
+area on the world map (or pick a single point with the 📍 tool), and click **Apply**.
+To move or reshape a selection, switch on **Edit** in the map toolbar first.
 
 ## Map widget
 
