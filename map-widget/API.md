@@ -140,8 +140,13 @@ Tip for NASA APIs: CMR / Earthdata `bounding_box=W,S,E,N` accepts `area.bbox` di
 ## 4. Input type – `MapData` (Data Loader → Widget)
 
 ```ts
-type MapData = GeoJsonMapData | RasterMapData | ImageMapData;
+type MapData = GeoJsonMapData | RasterMapData | ImageMapData | FieldMapData;
 ```
+
+Which one to use:
+- Values at locations (gridded product, station values) that should **fill the selected area** → `field` (4.4).
+- Ready-made shapes (points, lines, polygons) → `geojson` (4.1).
+- Pre-rendered map tiles or images → `raster` (4.2) / `image` (4.3).
 
 All variants accept two optional fields:
 
@@ -199,6 +204,48 @@ Note: `bounds` limits which tiles are **loaded**; it does not cut tiles exactly 
 Stretches one image (PNG/JPEG, e.g. a WMS `GetMap` result) over `bounds`.
 The image should be in Web Mercator (EPSG:3857). An EPSG:4326 image will be shifted in latitude over large areas.
 
+### 4.4 Scalar field on a triangle mesh – `FieldMapData` (extension of the spec)
+
+```ts
+{
+  type: "field";
+  samples: FeatureCollection<Point>;   // e.g. grid-cell centres, each with a numeric value
+  valueProperty?: string;              // property holding the value, default "value"
+  area?: Feature<Polygon>;             // polygon to fill; default = current selection
+  colorScale?: { min?: number; max?: number; colors?: string[] };  // default: data min/max, blue–white–red
+  mesh?: { baseCells?: number; borderRefinement?: number };        // default 16 / 3, see §5
+  showMesh?: boolean;                  // draw triangle edges
+  id?: string;
+  opacity?: number;                    // default 0.75
+}
+```
+
+The widget fills `area` with a triangle mesh that ends **exactly** on the area border, refined
+near the border, and colours each triangle by the value interpolated (inverse distance weighting)
+from `samples` at the triangle centroid. Clicking a triangle shows its value.
+
+Tips for the Data Loader:
+- Send samples that cover the whole `area.bbox`, including a little outside the polygon, so
+  values near the border are well supported.
+- Pass `area` explicitly (the `AreaFeature` you were given), so the mesh matches the request even
+  if the user edits the selection meanwhile.
+- Sample longitudes may be wrapped (±180) or continuous; both work across the antimeridian.
+
+Example:
+
+```ts
+{
+  type: "field",
+  samples: { type: "FeatureCollection", features: [
+    { type: "Feature", properties: { trend: 0.42 }, geometry: { type: "Point", coordinates: [6.5, 50.5] } },
+    // …
+  ] },
+  valueProperty: "trend",
+  area,
+  colorScale: { min: -1, max: 1 },
+}
+```
+
 ---
 
 ## 5. Helper functions (exported)
@@ -218,6 +265,27 @@ Input: any longitude. Output: the same longitude in [-180, 180] (180 stays 180).
 geodesicAreaKm2(ring: Position[]): number
 ```
 Input: closed ring of `[lng, lat]`. Output: area in km² (spherical Earth).
+
+```ts
+triangulateArea(ring: Position[], opts?: MeshOptions): MeshTriangle[]
+
+interface MeshOptions { baseCells?: number; borderRefinement?: number }
+interface MeshTriangle { ring: Position[]; centroid: Position; level: number }
+```
+Input: closed ring `[lng, lat]` (e.g. `area.geometry.coordinates[0]`).
+Output: triangles whose union is exactly the polygon. `ring` is a closed 4-point ring, `centroid` is
+where values are sampled, `level` is the refinement level (0 = base cell).
+- `baseCells` (default 16): number of square base cells along the longer side of the bounding box.
+- `borderRefinement` (default 3): cells cut by the border are split into 4 this many times (each level halves the size);
+  the finest border cells are then clipped exactly to the polygon. Interior cells stay coarse.
+- Meshing happens in Web Mercator space, where MapLibre draws polygon edges as straight lines, so the
+  mesh border matches the drawn selection border at every size.
+- Cost: ~3 ms for the defaults (~3,000 triangles); 16/5 gives ~10,000 triangles in ~10 ms.
+
+```ts
+idwValue(p: Position, samples: { lng: number; lat: number; value: number }[]): number | null
+```
+Input: a position and point samples. Output: inverse-distance-weighted value (power 2), or `null` without samples.
 
 ```ts
 BASEMAPS: Record<BasemapId, { label: string; style: string | StyleSpecification }>
@@ -261,7 +329,7 @@ Not needed for integration. Listed so the module boundaries from the spec are vi
 
 | Member | Input | Output | Purpose |
 |---|---|---|---|
-| `new DataRenderer(map, opts)` | `maplibregl.Map`, `{ beforeLayerId: () => string \| undefined; popupsEnabled: () => boolean }` | instance | Draws result layers. |
+| `new DataRenderer(map, opts)` | `maplibregl.Map`, `{ beforeLayerId: () => string \| undefined; popupsEnabled: () => boolean; currentArea: () => Feature<Polygon> \| null }` | instance | Draws result layers. |
 | `setData(data)` | `MapData[]` | `void` | Replace all result layers. |
 | `suspend()` | – | `void` | Call before the style is replaced. |
 | `reapply()` | – | `void` | Re-add layers after a style load. |
@@ -271,6 +339,7 @@ Not needed for integration. Listed so the module boundaries from the spec are vi
 
 | Function | Input | Output |
 |---|---|---|
+| `mesh.ts` → `triangulateArea`, `idwValue` | see §5 | Mesh used by `field` data |
 | `normalizeRing(ring)` | `Position[]` | `{ ring: Position[]; bbox: BBox; crossesAntimeridian: boolean }` – closed, CCW, rounded, shifted to centre within ±180 |
 | `isAxisAlignedRectangle(ring)` | `Position[]` | `boolean` |
 

@@ -245,7 +245,7 @@ export class SelectionManager {
 function createModes() {
   const shapeStyle = {
     fillColor: ACCENT,
-    fillOpacity: 0.12,
+    fillOpacity: 0.06,
     outlineColor: ACCENT,
     outlineWidth: 2,
   } as const;
@@ -266,7 +266,7 @@ function createModes() {
       },
       styles: {
         selectedPolygonColor: ACCENT,
-        selectedPolygonFillOpacity: 0.2,
+        selectedPolygonFillOpacity: 0.05,
         selectedPolygonOutlineColor: ACCENT,
         selectedPolygonOutlineWidth: 3,
         selectionPointColor: WHITE,

@@ -95,6 +95,7 @@ export function MapWidget(props: MapWidgetProps & { ref?: Ref<MapWidgetHandle> }
         (engine.map.getLayer(`${SELECTION_LAYER_PREFIX}-polygon`) ? `${SELECTION_LAYER_PREFIX}-polygon` : undefined),
       // Results lie inside the selection, so popups may open on top of it; only drawing tools suppress them.
       popupsEnabled: () => selection.currentTool === "select",
+      currentArea: () => selection.getArea(),
     });
 
     let first = true;

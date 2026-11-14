@@ -1,12 +1,12 @@
 // Simulated Data Loader for local testing. The real loader (NASA APIs) is owned by the data team;
 // it only has to accept an AreaFeature and return MapData — the same contract as here.
-import type { Feature, Polygon, Position } from "geojson";
+import type { Feature, Point, Position } from "geojson";
 import type { AreaFeature, MapData } from "../widget";
 
 export type MockDataset = "grid" | "stations" | "lst";
 
 export const MOCK_DATASETS: { id: MockDataset; label: string }[] = [
-  { id: "grid", label: "Trend grid (GeoJSON polygons)" },
+  { id: "grid", label: "Trend field (samples → triangle mesh)" },
   { id: "stations", label: "Stations (GeoJSON points)" },
   { id: "lst", label: "MODIS land surface temp (raster tiles, NASA GIBS)" },
 ];
@@ -17,7 +17,14 @@ export async function mockLoadData(area: AreaFeature, dataset: MockDataset): Pro
 
   switch (dataset) {
     case "grid":
-      return { type: "geojson", id: "trend-grid", data: { type: "FeatureCollection", features: trendGrid(ring) } };
+      return {
+        type: "field",
+        id: "trend-field",
+        samples: { type: "FeatureCollection", features: trendSamples(ring) },
+        valueProperty: "trend_K_per_decade",
+        area,
+        colorScale: { min: -1, max: 1 },
+      };
     case "stations":
       return { type: "geojson", id: "stations", data: { type: "FeatureCollection", features: stations(ring) } };
     case "lst":
@@ -65,22 +72,17 @@ function trendColor(v: number): string {
 const syntheticTrend = (lng: number, lat: number) =>
   0.8 * Math.sin((lng * Math.PI) / 25) * Math.cos((lat * Math.PI) / 30) + 0.2 * Math.sin(lat / 7);
 
-function trendGrid(ring: Position[]): Feature<Polygon>[] {
+/** Regular sample grid over the area's bounding box, like gridded satellite products. */
+function trendSamples(ring: Position[]): Feature<Point>[] {
   const { w, e, s, n } = extent(ring);
-  const step = Math.max(e - w, n - s) / 14;
-  const out: Feature<Polygon>[] = [];
-  for (let x = w; x < e; x += step) {
-    for (let y = s; y < n; y += step) {
-      const c: Position = [x + step / 2, y + step / 2];
-      if (!inside(c, ring)) continue;
-      const trend = syntheticTrend(c[0], c[1]);
+  const step = Math.max(e - w, n - s) / 12;
+  const out: Feature<Point>[] = [];
+  for (let x = w + step / 2; x < e + step; x += step) {
+    for (let y = s + step / 2; y < n + step; y += step) {
       out.push({
         type: "Feature",
-        properties: { trend_K_per_decade: +trend.toFixed(3), color: trendColor(trend) },
-        geometry: {
-          type: "Polygon",
-          coordinates: [[[x, y], [x + step, y], [x + step, y + step], [x, y + step], [x, y]]],
-        },
+        properties: { trend_K_per_decade: +syntheticTrend(x, y).toFixed(3) },
+        geometry: { type: "Point", coordinates: [x, y] },
       });
     }
   }

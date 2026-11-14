@@ -6,7 +6,9 @@ import {
   type MapLayerMouseEvent,
   type SourceSpecification,
 } from "maplibre-gl";
-import type { MapData } from "./types";
+import type { Feature, FeatureCollection, Polygon } from "geojson";
+import { idwValue, triangulateArea } from "./mesh";
+import type { FieldMapData, MapData } from "./types";
 
 /** Prefix of all MapLibre sources/layers created for result data. */
 export const DATA_LAYER_PREFIX = "mw-data";
@@ -22,10 +24,14 @@ export interface DataRendererOptions {
   beforeLayerId: () => string | undefined;
   /** Return false to suppress feature popups (e.g. while a drawing tool is active). */
   popupsEnabled: () => boolean;
+  /** Area used by `field` data that does not bring its own. */
+  currentArea: () => Feature<Polygon> | null;
 }
 
+const DIVERGING = ["#2166ac", "#67a9cf", "#f7f7f7", "#ef8a62", "#b2182b"];
+
 /**
- * Renders Data Loader results (GeoJSON vectors, XYZ raster tiles, single images) as MapLibre
+ * Renders Data Loader results (GeoJSON vectors, triangle-meshed fields, XYZ raster tiles, single images) as MapLibre
  * sources/layers. Keeps the current data so it can be re-applied after a basemap switch.
  */
 export class DataRenderer {
@@ -172,6 +178,34 @@ export class DataRenderer {
         );
         break;
       }
+      case "field": {
+        const mesh = buildFieldMesh(item, this.opts.currentArea());
+        if (!mesh) break;
+        this.addSource(key, { type: "geojson", data: mesh.collection });
+        this.addLayer(
+          {
+            id: `${key}-mesh`,
+            type: "fill",
+            source: key,
+            // No antialiasing: avoids hairline seams between adjacent triangles.
+            paint: { "fill-color": mesh.colorExpression, "fill-opacity": item.opacity ?? 0.75, "fill-antialias": false },
+          },
+          before,
+          true,
+        );
+        if (item.showMesh) {
+          this.addLayer(
+            {
+              id: `${key}-edges`,
+              type: "line",
+              source: key,
+              paint: { "line-color": "#1f2933", "line-opacity": 0.35, "line-width": 0.6 },
+            },
+            before,
+          );
+        }
+        break;
+      }
       case "image": {
         let [w, s, e, n] = item.bounds;
         if (w > e) e += 360;
@@ -210,6 +244,47 @@ export class DataRenderer {
     this.popup.setLngLat(e.lngLat).setDOMContent(propertiesTable(feature.properties)).addTo(this.map);
   };
 }
+
+/** Triangulates the field's area and assigns each triangle an interpolated value. */
+function buildFieldMesh(
+  item: FieldMapData,
+  fallbackArea: Feature<Polygon> | null,
+): { collection: FeatureCollection; colorExpression: ExpressionSpecification } | null {
+  const area = item.area ?? fallbackArea;
+  if (!area) {
+    console.warn("[MapWidget] field data needs an area (none given and no selection).");
+    return null;
+  }
+  const prop = item.valueProperty ?? "value";
+  const samples = item.samples.features.flatMap((f) => {
+    const v = Number(f.properties?.[prop]);
+    const [lng, lat] = f.geometry.coordinates;
+    return Number.isFinite(v) ? [{ lng, lat, value: v }] : [];
+  });
+  if (samples.length === 0) return null;
+
+  const triangles = triangulateArea(area.geometry.coordinates[0], item.mesh);
+  const collection: FeatureCollection = {
+    type: "FeatureCollection",
+    features: triangles.map((t) => ({
+      type: "Feature",
+      properties: { [prop]: round3(idwValue(t.centroid, samples) ?? 0), mesh_level: t.level },
+      geometry: { type: "Polygon", coordinates: [t.ring] },
+    })),
+  };
+
+  const colors = item.colorScale?.colors?.length ? item.colorScale.colors : DIVERGING;
+  const min = item.colorScale?.min ?? Math.min(...samples.map((s) => s.value));
+  let max = item.colorScale?.max ?? Math.max(...samples.map((s) => s.value));
+  if (!(max > min)) max = min + 1;
+  const stops = colors.flatMap((c, i) => [min + ((max - min) * i) / Math.max(1, colors.length - 1), c]);
+  const colorExpression = (
+    colors.length === 1 ? colors[0] : ["interpolate", ["linear"], ["to-number", ["get", prop]], ...stops]
+  ) as ExpressionSpecification;
+  return { collection, colorExpression };
+}
+
+const round3 = (n: number) => Math.round(n * 1000) / 1000;
 
 /** MapLibre tile bounds must have west < east; antimeridian boxes are unwrapped. */
 function rasterBounds([w, s, e, n]: [number, number, number, number]): [number, number, number, number] {

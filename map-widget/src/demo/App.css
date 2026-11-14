@@ -112,3 +112,24 @@ body {
     border-top: 1px solid #dde3ea;
   }
 }
+
+.demo-mesh {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 10px 10px;
+  border: 1px solid #dde3ea;
+  border-radius: 6px;
+}
+
+.demo-mesh legend {
+  padding: 0 4px;
+  font-weight: 600;
+}
+
+.demo-side .demo-check {
+  flex-direction: row;
+  align-items: center;
+  font-weight: 400;
+}
