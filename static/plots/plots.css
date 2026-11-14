@@ -401,3 +401,32 @@ button.tp-legend-item:hover {
 .tp-root [hidden] {
     display: none !important;
 }
+
+/* Drag-to-zoom */
+.tp-chart .tp-hit {
+    cursor: crosshair;
+    touch-action: pan-y;
+}
+.tp-zoom-reset {
+    position: absolute;
+    top: 4px;
+    right: 8px;
+    z-index: 2;
+    font: inherit;
+    font-size: 0.74rem;
+    padding: 2px 9px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #fff;
+    color: var(--tp-ink-2);
+    cursor: pointer;
+}
+.tp-zoom-reset:hover {
+    background: #f8fafc;
+}
+.tp-footer-note {
+    margin-right: auto;
+    align-self: center;
+    font-size: 0.74rem;
+    color: var(--tp-muted);
+}

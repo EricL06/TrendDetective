@@ -74,6 +74,7 @@
         custom: { start: '01.06', end: '31.08' },
         fn: { anomaly: false, ma: false, maWindow: 3, trend: true, clim: false, zoom: false },
         hiddenYears: new Set(),
+        zoom: null,
         showTable: false,
         loading: false,
         analysisCache: new Map(),
@@ -320,12 +321,28 @@
     // --------------------------------------------------------------- views
 
     function timeTicks(domain) {
-        return (plotW) => {
-            const [a, b] = domain;
+        return (plotW, shown = domain) => {
+            const [a, b] = shown;
             const spanYears = (b - a) / (YEAR_DAYS * DAY_MS);
             const startYear = new Date(a).getUTCFullYear();
             const endYear = new Date(b).getUTCFullYear();
             const ticks = [];
+            const spanDays = (b - a) / DAY_MS;
+            if (spanDays <= 90) {
+                // Zoomed in to a few weeks: day ticks, with the month named at its first tick.
+                const every = [1, 2, 5, 7, 10, 15].find((k) => spanDays / k <= Math.max(2, Math.floor(plotW / 62))) || 15;
+                let lastMonth = -1;
+                for (let t = Math.ceil(a / DAY_MS) * DAY_MS; t <= b; t += DAY_MS) {
+                    const d = new Date(t);
+                    const day = d.getUTCDate();
+                    // Every 7 days: Mondays. Otherwise days 1, 1+k, …; skip 29–31 so they don't crowd the 1st.
+                    if (every === 7 ? d.getUTCDay() !== 1 : (day - 1) % every !== 0 || (every > 1 && day > 28)) continue;
+                    const m = d.getUTCMonth();
+                    ticks.push({ v: t, label: m !== lastMonth ? `${day} ${MONTHS[m]}${m === 0 || lastMonth < 0 ? ` ${d.getUTCFullYear()}` : ''}` : String(day) });
+                    lastMonth = m;
+                }
+                return ticks;
+            }
             if (spanYears > 2.5) {
                 const every = Math.max(1, Math.ceil((endYear - startYear + 1) / Math.max(2, Math.floor(plotW / 56))));
                 for (let y = startYear; y <= endYear + 1; y++) {
@@ -349,8 +366,8 @@
         };
     }
 
-    function seasonTicks(offset, domain) {
-        return (plotW) => {
+    function seasonTicks(offset, fullDomain) {
+        return (plotW, domain = fullDomain) => {
             const every = plotW / 12 < 34 ? 2 : 1;
             const ticks = [];
             for (let i = 0; i < 12; i++) {
@@ -619,9 +636,10 @@
         return {
             kind: 'year',
             xDomain: domain,
-            xTicks: (plotW) => {
-                const every = Math.max(1, Math.ceil(rows.length / Math.max(2, Math.floor(plotW / (period.wraps ? 58 : 44)))));
-                return rows.filter((_, i) => i % every === 0).map((r) => ({ v: r.year, label: r.label }));
+            xTicks: (plotW, shown = domain) => {
+                const visible = rows.filter((r) => r.year >= shown[0] - 0.01 && r.year <= shown[1] + 0.01);
+                const every = Math.max(1, Math.ceil(visible.length / Math.max(2, Math.floor(plotW / (period.wraps ? 58 : 44)))));
+                return visible.filter((_, i) => i % every === 0).map((r) => ({ v: r.year, label: r.label }));
             },
             formatX: (x) => {
                 const r = rows.find((q) => q.year === Math.round(x));
@@ -655,7 +673,12 @@
         if (width === host._w) return;
         host._w = width;
         const { svg, geom } = svgFor(spec, width);
-        host.innerHTML = `${svg}<div class="tp-tooltip" hidden></div>`;
+        const reset = spec.zoomed && geom
+            ? `<button type="button" class="tp-zoom-reset" title="Show the whole time range (or double-click the plot)">Reset zoom</button>`
+            : '';
+        host.innerHTML = `${svg}${reset}<div class="tp-tooltip" hidden></div>`;
+        const btn = host.querySelector('.tp-zoom-reset');
+        if (btn) btn.addEventListener('click', () => host._onZoom && host._onZoom(null));
         attachHover(host, spec, geom);
     }
 
@@ -667,8 +690,15 @@
         const right = hasDirect ? 58 : 18;
 
         const ys = [...(spec.yInclude || [])];
+        // When zoomed, fit the y axis to what is visible (plus the neighbour on each side).
+        const [dx0, dx1] = spec.xDomain;
+        const visiblePoints = (pts) => {
+            if (!spec.zoomed) return pts;
+            const inside = pts.filter((p) => p.x >= dx0 && p.x <= dx1);
+            return inside.length ? inside : pts;
+        };
         for (const s of spec.series) {
-            for (const p of s.points) {
+            for (const p of visiblePoints(s.points)) {
                 if (isNum(p.y)) ys.push(p.y);
                 if (isNum(p.lo)) ys.push(p.lo);
                 if (isNum(p.hi)) ys.push(p.hi);
@@ -714,7 +744,7 @@
 
         // x ticks; drop labels that would overlap.
         let lastEnd = -Infinity;
-        for (const t of spec.xTicks(plotW)) {
+        for (const t of spec.xTicks(plotW, spec.xDomain)) {
             const x = sx(t.v);
             if (x < left - 0.5 || x > left + plotW + 0.5) continue;
             const w = t.label.length * 6.4;
@@ -782,7 +812,7 @@
                     }
                 }
                 if (s.directLabel) {
-                    const last = [...s.points].reverse().find((p) => isNum(p.y));
+                    const last = [...s.points].reverse().find((p) => isNum(p.y) && p.x <= x1);
                     if (last) labels += `<text class="tp-direct" x="${f(sx(last.x) + 6)}" y="${f(sy(last.y))}" dominant-baseline="middle">${esc(s.directLabel)}</text>`;
                 }
             }
@@ -790,6 +820,7 @@
         out += `<g clip-path="url(#tp-clip)">${marks}${overlays}</g>${labels}`;
         out += `<line class="tp-cross" x1="0" x2="0" y1="${top}" y2="${top + plotH}" stroke="${COLOR.reference}" stroke-width="1" visibility="hidden" />`;
         out += '<g class="tp-hover-dots"></g>';
+        out += `<rect class="tp-brush" x="0" y="${top}" width="0" height="${plotH}" fill="${COLOR.accentWash}" stroke="${COLOR.accent}" stroke-width="1" visibility="hidden" pointer-events="none" />`;
         out += `<rect class="tp-hit" x="${left}" y="${top}" width="${plotW}" height="${plotH}" fill="transparent" />`;
 
         const svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${esc(spec.ariaLabel || 'Chart')}">${out}</svg>`;
@@ -865,8 +896,46 @@
             tip.style.top = `${Math.max(4, (evt.clientY - rect.top) - tip.offsetHeight / 2)}px`;
         };
         const hit = svg.querySelector('.tp-hit');
-        hit.addEventListener('pointermove', show);
-        hit.addEventListener('pointerleave', hide);
+        const brush = svg.querySelector('.tp-brush');
+        const toPx = (evt) => {
+            const rect = svg.getBoundingClientRect();
+            const px = (evt.clientX - rect.left) * (geom.width / rect.width);
+            return Math.min(geom.left + geom.plotW, Math.max(geom.left, px));
+        };
+        const toX = (px) => geom.x0 + ((px - geom.left) / geom.plotW) * (geom.x1 - geom.x0);
+        let drag = null;
+
+        // Drag across the plot to zoom into that range (like a timeline in a video editor).
+        hit.addEventListener('pointerdown', (evt) => {
+            if (evt.button !== 0) return;
+            drag = { from: toPx(evt), to: toPx(evt), id: evt.pointerId };
+            hit.setPointerCapture(evt.pointerId);
+            evt.preventDefault();
+        });
+        hit.addEventListener('pointermove', (evt) => {
+            if (!drag) { show(evt); return; }
+            drag.to = toPx(evt);
+            const a = Math.min(drag.from, drag.to);
+            const w = Math.abs(drag.to - drag.from);
+            brush.setAttribute('x', a.toFixed(1));
+            brush.setAttribute('width', w.toFixed(1));
+            brush.setAttribute('visibility', w > 2 ? 'visible' : 'hidden');
+            if (w > 2) hide(); else show(evt);
+        });
+        const finish = (evt, apply) => {
+            if (!drag || evt.pointerId !== drag.id) return;
+            const { from, to } = drag;
+            drag = null;
+            brush.setAttribute('visibility', 'hidden');
+            if (hit.hasPointerCapture(evt.pointerId)) hit.releasePointerCapture(evt.pointerId);
+            if (apply && Math.abs(to - from) >= 8 && host._onZoom) {
+                host._onZoom([toX(Math.min(from, to)), toX(Math.max(from, to))]);
+            }
+        };
+        hit.addEventListener('pointerup', (evt) => finish(evt, true));
+        hit.addEventListener('pointercancel', (evt) => finish(evt, false));
+        hit.addEventListener('pointerleave', () => { if (!drag) hide(); });
+        hit.addEventListener('dblclick', () => { if (spec.zoomed && host._onZoom) host._onZoom(null); });
     }
 
     // --------------------------------------------------------------- panel
@@ -907,6 +976,7 @@
         <div class="tp-legend" data-ref="legend"></div>
         <div class="tp-table-wrap" data-ref="table" hidden></div>
         <div class="tp-footer" data-ref="footer">
+            <span class="tp-footer-note">Drag across the plot to zoom in · double-click to reset</span>
             <button type="button" class="tp-link-btn" data-ref="tableBtn">Show table</button>
             <button type="button" class="tp-link-btn" data-ref="csvBtn">Download CSV</button>
         </div>
@@ -1073,6 +1143,20 @@
         else spec = buildTimeline(model, usablePeriod);
         spec.ariaLabel = `${state.topic}: ${VIEWS.find((v) => v.id === state.view).label}`;
         state.lastTable = spec.table;
+
+        // Drag-to-zoom: keep the zoomed range while the view, topic and full range stay the same.
+        const fullDomain = spec.xDomain;
+        const zoomKey = [state.topic, state.view, fullDomain[0], fullDomain[1]].join('|');
+        if (state.zoom && state.zoom.key === zoomKey) {
+            spec.xDomain = state.zoom.domain;
+            spec.zoomed = true;
+        } else {
+            state.zoom = null;
+        }
+        r.chart._onZoom = (domain) => {
+            state.zoom = domain ? { key: zoomKey, domain } : null;
+            render();
+        };
 
         r.footer.hidden = false;
         renderChart(r.chart, spec);
