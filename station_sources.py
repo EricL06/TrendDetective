@@ -428,16 +428,31 @@ class StationSource:
             if distance_km(request.latitude, request.longitude, station.latitude, station.longitude)
             <= self.POINT_RADIUS_KM
         ]
+        # Stations covering most of the range first, each group nearest first.
+        candidates.sort(key=lambda s: s.coverage_of(request.start_date, request.end_date) < 0.8)
         if not candidates:
             raise SourceError(
                 f"No {self.SOURCE} station reports {topic} within {self.POINT_RADIUS_KM:.0f} km "
                 "for the selected time range."
             )
+        # A station's listed period can be longer than its actual values, so
+        # the next candidate is tried while the values span too little.
+        best: tuple[float, Station, list[dict[str, Any]]] | None = None
         for station in candidates[: self.POINT_ATTEMPTS]:
             records = self.fetch([station], topic, request.start_date, request.end_date)
-            if records:
-                path = Path(output_dir) / point_filename(self.SOURCE, request, station.id)
-                return save_and_iterate(group_by_description(records), path)
+            if not records:
+                continue
+            days = sorted(record["date"] for record in records)
+            span = (date.fromisoformat(days[-1][:10]) - date.fromisoformat(days[0][:10])).days + 1
+            coverage = span / ((request.end_date - request.start_date).days + 1)
+            if best is None or coverage > best[0]:
+                best = (coverage, station, records)
+            if coverage >= 0.8:
+                break
+        if best is not None:
+            _, station, records = best
+            path = Path(output_dir) / point_filename(self.SOURCE, request, station.id)
+            return save_and_iterate(group_by_description(records), path)
         raise SourceError(
             f"The nearest {self.SOURCE} stations have no {topic} values in the selected time range."
         )

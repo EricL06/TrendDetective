@@ -384,6 +384,11 @@ VARIABLE_NAMES: dict[str, str] = {
     "emxt": "extreme maximum",
     "emnt": "extreme minimum",
     "prcp": "precipitation",
+    "mdpr": "multiday precipitation",
+    "emxp": "wettest day",
+    "dp01": "share of days with ≥ 0.25 mm",
+    "dp10": "share of days with ≥ 2.5 mm",
+    "dp1x": "share of days with ≥ 25 mm",
     "snow": "snowfall",
     "snwd": "snow depth",
     "awnd": "average wind speed",
@@ -426,6 +431,67 @@ def split_by_variable(
         (variable_label(topic, description) if description else topic, group)
         for description, group in sorted(groups.items())
     ]
+
+
+PRECIPITATION_AMOUNT_CODES: frozenset[str] = frozenset({"prcp", "mdpr"})
+"""Precipitation totals (mm) that are shown as a rate in ``mm/day``."""
+
+RAIN_DAY_COUNT_CODES: frozenset[str] = frozenset({"dp01", "dp10", "dp1x"})
+"""Monthly/annual counts of rain days, shown as the share of days in ``%``."""
+
+
+def precipitation_as_density(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Express precipitation totals and rain-day counts per day of their period.
+
+    NOAA reports precipitation as a total over the observation period: one
+    day for daily PRCP, a whole month or year for the monthly/annual
+    summaries, and ``DAPR`` days for a multiday total (``MDPR``). The rain-day
+    counts DP01/DP10/DP1X count days of a month or year. Plotted as-is, a
+    monthly count lands on a single day ("3 days of rain on one day") and
+    totals of different period lengths cannot be compared.
+
+    This returns copies in which
+
+    * PRCP/MDPR totals are divided by the number of days they cover
+      (unit ``mm/day``); an MDPR total is spread over its DAPR days,
+    * DP01/DP10/DP1X counts become the share of days with rain (unit ``%``),
+    * DAPR records (a day count, not an amount) are dropped.
+
+    Every other record is returned unchanged.
+    """
+    multiday_days: dict[tuple[Any, str], float] = {}
+    for record in records:
+        if str(record.get("description") or "").lower() == "dapr":
+            try:
+                days = float(record["value"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if math.isfinite(days) and days >= 1:
+                multiday_days[(record.get("station"), str(record.get("date")))] = days
+
+    converted: list[dict[str, Any]] = []
+    for record in records:
+        code = str(record.get("description") or "").lower()
+        if code == "dapr":
+            continue
+        if code not in PRECIPITATION_AMOUNT_CODES and code not in RAIN_DAY_COUNT_CODES:
+            converted.append(record)
+            continue
+        try:
+            value = float(record["value"])
+            period_start, period_end = _parse_observation_period(str(record["date"]))
+        except (KeyError, TypeError, ValueError):
+            converted.append(record)
+            continue
+        days = float((period_end - period_start).days + 1)
+        if code == "mdpr":
+            days = multiday_days.get((record.get("station"), str(record.get("date"))), days)
+        if code in RAIN_DAY_COUNT_CODES:
+            new_value, unit = 100.0 * value / days, "% of days"
+        else:
+            new_value, unit = value / days, "mm/day"
+        converted.append({**record, "value": round(new_value, 4), "unit": unit})
+    return converted
 
 
 def _parse_observation_period(raw_date: str) -> tuple[date, date]:
@@ -607,6 +673,9 @@ def process_user_request(user_request: Any) -> dict[str, Any]:
             continue
         # Each NOAA code (e.g. TMAX, TMIN, TAVG) is its own series; averaging
         # them together would mix different quantities.
+        # Precipitation as a density (mm/day, % of days) so periods of any
+        # length are comparable; DAPR day counts are folded into MDPR.
+        topic_records = precipitation_as_density(topic_records)
         for result_key, records in split_by_variable(topic, topic_records):
             station = _station_from_records(records, latitude, longitude)
             variables = sorted({str(r["description"]) for r in records if r.get("description")})

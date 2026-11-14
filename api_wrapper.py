@@ -200,7 +200,7 @@ def fetch_data_single_topic_nearest_station(
                 result.append(records)
         return result
 
-    answers: list[tuple[float, int, list[list[dict[str, Any]]]]] = []
+    answers: list[tuple[float, float, int, list[list[dict[str, Any]]]]] = []
     errors: list[str] = []
     with ThreadPoolExecutor(max_workers=len(keys)) as pool:
         futures = {key: pool.submit(run, key) for key in keys}
@@ -213,13 +213,60 @@ def fetch_data_single_topic_nearest_station(
             if any(isinstance(r.get("value"), (int, float)) for c in collections for r in c):
                 first = next(record for collection in collections for record in collection)
                 answers.append(
-                    (_nearest_distance([first], request.latitude, request.longitude), order, collections)
+                    (
+                        _record_coverage(collections, request),
+                        _nearest_distance([first], request.latitude, request.longitude),
+                        order,
+                        collections,
+                    )
                 )
             else:
                 errors.append(f"{PROVIDER_NAMES.get(key, key)}: no values in the selected time range")
     if not answers:
         raise SourceError(" | ".join(errors) if errors else "No data source returned values.")
-    return min(answers, key=lambda answer: answer[:2])[2]
+    # A near station that only has a few of the requested years must not beat
+    # one a little farther away that covers the whole range.
+    good = [answer for answer in answers if answer[0] >= GOOD_COVERAGE]
+    if good:
+        return min(good, key=lambda answer: (answer[1], answer[2]))[3]
+    return max(answers, key=lambda answer: (answer[0], -answer[1], -answer[2]))[3]
+
+
+GOOD_COVERAGE: float = 0.8
+"""Share of the requested range a point answer must span to be chosen by distance alone."""
+
+
+def _period(text: str) -> tuple[date, date] | None:
+    """First and last day of a ``YYYY-MM-DD``, ``YYYY-MM`` or ``YYYY`` observation date."""
+    try:
+        if len(text) >= 10:
+            day = date.fromisoformat(text[:10])
+            return day, day
+        if len(text) == 7:
+            year, month = int(text[:4]), int(text[5:7])
+            return date(year, month, 1), date(year + month // 12, month % 12 + 1, 1)
+        if len(text) == 4:
+            return date(int(text), 1, 1), date(int(text), 12, 31)
+    except ValueError:
+        pass
+    return None
+
+
+def _record_coverage(collections: list[list[dict[str, Any]]], request: PointDataRequest) -> float:
+    """Share of the requested range between the first and last observation."""
+    periods = [
+        period
+        for collection in collections
+        for record in collection
+        if isinstance(record.get("value"), (int, float))
+        and (period := _period(str(record.get("date")))) is not None
+    ]
+    if not periods:
+        return 0.0
+    first = max(min(start for start, _ in periods), request.start_date)
+    last = min(max(end for _, end in periods), request.end_date)
+    requested = (request.end_date - request.start_date).days + 1
+    return max(0.0, min(1.0, ((last - first).days + 1) / requested))
 
 
 def get_all_topics_list() -> list[str]:

@@ -25,6 +25,20 @@ class RegionLookupTest(unittest.TestCase):
             self.assertLess(west, east, region["id"])
             self.assertLess(south, north, region["id"])
 
+    def test_regions_follow_the_selected_topics(self) -> None:
+        all_ids = {r["id"] for r in area_analysis.list_regions()}
+        temperature = area_analysis.list_regions(["temperature"])
+        self.assertTrue(temperature)
+        self.assertTrue(all("temperature" in r["note"] for r in temperature))
+        # Hourly and marine data have no fixed area stations: no region offered.
+        self.assertEqual(area_analysis.list_regions(["temperature_hourly"]), [])
+        self.assertEqual(area_analysis.list_regions(["marine_waves"]), [])
+        # A region with fewer than MIN_STATIONS counted stations is left out.
+        sparse = area_analysis.Region("sparse", "Sparse", (0.0, 0.0, 1.0, 1.0), 1, 50)
+        self.assertIsNone(area_analysis._region_for_topics(sparse, ["temperature"]))
+        self.assertIsNotNone(area_analysis._region_for_topics(sparse, ["precipitation"]))
+        self.assertLessEqual({r["id"] for r in temperature}, all_ids)
+
 
 class AreaSeriesTest(unittest.TestCase):
     def test_gap_in_a_warm_station_does_not_make_a_jump(self) -> None:

@@ -7,9 +7,10 @@ station in the region is fetched, binned like a point request and analysed
 on its own (one coloured dot per station on the map); the region's series is
 the mean of all stations (see :func:`_area_series`).
 
-The regions were chosen with a station count from the NCEI Search Service
-for 2015–2024 (stations whose record covers the whole period): every region
-has at least 12 temperature and 14 precipitation stations. Wind and the other
+The regions were chosen with a station count for 2015–2024 (stations whose
+record covers at least :data:`MIN_COVERAGE` of the period, all databases
+together, duplicates removed): every region has at least 7 temperature and
+10 precipitation stations. Wind and the other
 optional daily codes are sparse everywhere, so a topic is only evaluated
 when the region has at least :data:`MIN_STATIONS` stations for it.
 
@@ -95,7 +96,7 @@ class Region:
             "bbox": list(self.bbox),
             "note": (
                 f"{self.temperature_stations} temperature / "
-                f"{self.precipitation_stations} precipitation stations (2015–2024)"
+                f"{self.precipitation_stations} precipitation stations (2015–2024, all sources)"
             ),
         }
 
@@ -115,14 +116,14 @@ REGIONS: tuple[Region, ...] = (
     Region("san-francisco-bay", "San Francisco Bay", (-122.8, 37.2, -121.8, 38.2), 37, 65),
     Region("seattle", "Seattle–Puget Sound", (-122.8, 47.0, -121.8, 48.0), 18, 71),
     Region("netherlands", "Netherlands", (4.0, 51.5, 6.5, 53.0), 19, 191),
-    Region("berlin-brandenburg", "Berlin–Brandenburg", (12.5, 52.0, 14.5, 53.0), 14, 14),
-    Region("bavaria", "Bavaria", (10.5, 47.5, 12.5, 49.5), 43, 47),
+    Region("berlin-brandenburg", "Berlin–Brandenburg", (12.5, 52.0, 14.5, 53.0), 15, 52),
+    Region("bavaria", "Bavaria", (10.5, 47.5, 12.5, 49.5), 58, 247),
     Region("southern-sweden", "Southern Sweden", (12.5, 55.3, 14.5, 56.5), 14, 36),
     Region("sydney", "Sydney", (150.6, -34.2, 151.4, -33.5), 19, 48),
-    Region("toronto", "Toronto", (-80.0, 43.4, -79.0, 44.1), 0, 0),
-    Region("montreal", "Montréal", (-74.2, 45.2, -73.2, 45.8), 0, 0),
-    Region("vancouver", "Vancouver", (-123.4, 49.0, -122.4, 49.5), 0, 0),
-    Region("helsinki", "Helsinki–Uusimaa", (24.0, 59.9, 25.8, 60.7), 0, 0),
+    Region("toronto", "Toronto", (-80.0, 43.4, -79.0, 44.1), 7, 10),
+    Region("montreal", "Montréal", (-74.2, 45.2, -73.2, 45.8), 23, 23),
+    Region("vancouver", "Vancouver", (-123.4, 49.0, -122.4, 49.5), 20, 21),
+    Region("helsinki", "Helsinki–Uusimaa", (24.0, 59.9, 25.8, 60.7), 21, 21),
 )
 """Regions offered by the map's Areas button."""
 
@@ -135,9 +136,62 @@ _FALLING_WEAK = "#93c5fd"
 _FLAT = "#94a3b8"
 
 
-def list_regions() -> list[dict[str, Any]]:
-    """All regions as JSON-friendly dicts."""
-    return [region.to_dict() for region in REGIONS]
+def _counted_stations(region: Region, topic_key: str) -> int | None:
+    """Known station count of ``region`` for ``topic_key``; ``None`` when not counted in advance."""
+    topic = topic_key.lower()
+    if topic == "temperature":
+        return region.temperature_stations
+    if topic == "precipitation":
+        return region.precipitation_stations
+    return None
+
+
+def _area_capable(region: Region, topic_key: str) -> bool:
+    """Whether any database can have fixed stations for ``topic_key`` in ``region``.
+
+    Mirrors the checks of :func:`_evaluate_topic` and :func:`_other_source_stations`.
+    """
+    noaa_topic = noaa_api.TOPICS.get(topic_key.lower())
+    if noaa_topic is not None and noaa_topic.dataset in AREA_DATASETS:
+        return True
+    for key in api_wrapper.providers_for(topic_key):
+        if key == "noaa":
+            continue
+        covers_box = getattr(api_wrapper._PROVIDERS[key], "covers_box", None)
+        if covers_box is not None and covers_box(region.bbox):
+            return True
+    return False
+
+
+def _region_for_topics(region: Region, topics: list[str]) -> dict[str, Any] | None:
+    """``region`` as a dict with a note for the selected topics, or ``None`` if none can be evaluated there."""
+    usable: list[str] = []
+    for topic in topics:
+        if not _area_capable(region, topic):
+            continue
+        count = _counted_stations(region, topic)
+        if count is None:
+            usable.append(f"{topic}: stations checked on evaluation")
+        elif count >= MIN_STATIONS:
+            usable.append(f"{topic}: {count} stations (2015–2024)")
+    if not usable:
+        return None
+    result = region.to_dict()
+    result["note"] = " · ".join(usable)
+    return result
+
+
+def list_regions(topics: list[str] | None = None) -> list[dict[str, Any]]:
+    """Regions as JSON-friendly dicts.
+
+    :param topics: Selected topics. When given, only regions in which at
+        least one of them can be evaluated are listed, and the note names
+        those topics; without topics every region is listed.
+    """
+    if not topics:
+        return [region.to_dict() for region in REGIONS]
+    listed = (_region_for_topics(region, topics) for region in REGIONS)
+    return [region for region in listed if region is not None]
 
 
 def region_for_area(area: Any) -> Region | None:
@@ -285,8 +339,38 @@ def _gather_stations(
     if others and noaa_stations:
         noaa_stations = _with_ghcnd_identities(noaa_stations)
     kept, dropped = station_sources.deduplicate([*noaa_stations, *others])
-    ranked = sorted(kept, key=lambda s: (-s.coverage, s.priority, s.source, s.id))
-    return ranked[:MAX_STATIONS], dropped, clients, errors
+    return _spread(kept, MAX_STATIONS), dropped, clients, errors
+
+
+def _spread(stations: list[Station], count: int) -> list[Station]:
+    """At most ``count`` stations, the longest records first, spread over the region.
+
+    Stations are taken in order of coverage; within the same coverage the
+    next one is always the station farthest from all chosen ones, so a dense
+    network (hundreds of DWD rain gauges) does not end up as one cluster.
+    """
+    ranked = sorted(stations, key=lambda s: (-round(s.coverage, 2), s.priority, s.source, s.id))
+    if len(ranked) <= count:
+        return ranked
+    chosen: list[Station] = []
+    for coverage in sorted({round(s.coverage, 2) for s in ranked}, reverse=True):
+        group = [s for s in ranked if round(s.coverage, 2) == coverage]
+        while group and len(chosen) < count:
+            if not chosen:
+                pick = group[0]
+            else:
+                pick = max(
+                    group,
+                    key=lambda s: min(
+                        station_sources.distance_km(s.latitude, s.longitude, c.latitude, c.longitude)
+                        for c in chosen
+                    ),
+                )
+            chosen.append(pick)
+            group.remove(pick)
+        if len(chosen) >= count:
+            break
+    return chosen
 
 
 def _fetch_records(
