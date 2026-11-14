@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TrendDetective</title>
     <link rel="stylesheet" href="/static/map-widget/map-widget.css">
+    <link rel="stylesheet" href="/static/plots/plots.css">
     <style>
         * {
             box-sizing: border-box;
@@ -429,6 +430,11 @@
             <div id="map-widget"></div>
         </div>
 
+        <!-- Plot panel: timeline, years overlaid, period across years (static/plots/plots.js) -->
+        <section class="status-card" aria-label="Plot of the requested data">
+            <div id="plot-panel"></div>
+        </section>
+
         <div class="status-card">
             <h3>Request Visualization &amp; Task Output (<code>src/task.py</code>)</h3>
             <div id="visualization-container" class="viz-grid">
@@ -442,6 +448,10 @@
         </div>
     </main>
 
+    <script src="/static/plots/plots.js"></script>
+    <script>
+        if (window.TrendPlots) window.TrendPlots.mount(document.getElementById('plot-panel'));
+    </script>
     <script type="module" src="/static/map-widget/map-widget.js"></script>
     <script type="module">
         let selectedArea = null;
@@ -999,6 +1009,7 @@
                 if (window.trendMap) {
                     window.trendMap.setLoading(true);
                 }
+                if (window.TrendPlots) window.TrendPlots.setLoading(true);
 
                 const payload = {
                     topics: selectedTopics,
@@ -1036,6 +1047,7 @@
                     `UserRequest(\n  topics=${JSON.stringify(ur.topics, null, 2)},\n  tools=${JSON.stringify(ur.tools, null, 2)},\n  timeintervall=(${d1}, ${d2}),\n  interval_length=(${formattedFloat}, ${JSON.stringify(unit)}),\n  area=${formatArea(ur.area)}\n)`;
 
                 renderVisualization(data.visualization);
+                if (window.TrendPlots) window.TrendPlots.setData(data.visualization, ur);
             } catch (error) {
                 document.getElementById('user-request-output').textContent =
                     'Error: Could not submit UserRequest. Ensure at least one topic, valid DD.MM.YYYY dates, and an interval length > 0 are provided.';
@@ -1043,6 +1055,7 @@
                 if (window.trendMap) {
                     window.trendMap.setLoading(false);
                 }
+                if (window.TrendPlots) window.TrendPlots.setLoading(false);
             }
         }
 
