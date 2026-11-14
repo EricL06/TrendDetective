@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Any, Iterator, Protocol, Sequence
 
 from noaa_api import NOAAClient, NOAAError
 
@@ -29,8 +29,8 @@ class PointDataProvider(Protocol):
         *,
         request: PointDataRequest,
         output_dir: str | Path,
-    ) -> list[Path]:
-        """Fetch the requested topic at one coordinate."""
+    ) -> list[Iterator[dict[str, Any]]]:
+        """Fetch one coordinate and return lazy iterators by variable."""
         ...
 
 
@@ -79,8 +79,8 @@ def fetch_data_single_topic_single_coordinate(
     *,
     provider: str = "noaa",
     output_dir: str | Path | None = None,
-) -> list[Path]:
-    """Fetch one topic for one coordinate and save the provider's results.
+) -> list[Iterator[dict[str, Any]]]:
+    """Fetch one topic and return one lazy iterator per measured variable.
 
     :param request: Point, topic and inclusive date range to retrieve.
     :type request: PointDataRequest
@@ -89,9 +89,10 @@ def fetch_data_single_topic_single_coordinate(
     :param output_dir: Parent directory where result files are stored. By
         default, files go to ``data/<provider>/``.
     :type output_dir: str, pathlib.Path, or None
-    :returns: Paths to files downloaded from the provider. An empty list means
-        the completed request produced no files.
-    :rtype: list[pathlib.Path]
+    :returns: A list of iterators, one per measured variable. Each iterator
+        yields records with the six shared metadata fields, ``value``, and
+        ``description``. Records are read lazily from the saved JSON file.
+    :rtype: list[typing.Iterator[dict[str, typing.Any]]]
     :raises ValueError: If the provider name is not registered.
     :raises NOAAError: If NOAA rejects or fails the request.
     :raises TimeoutError: If the provider task does not finish in time.

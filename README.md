@@ -50,8 +50,10 @@ request = PointDataRequest(
 )
 # NOAA is the default. The provider keyword keeps the wrapper ready for
 # additional API clients in the future.
-files = fetch_data_single_topic_single_coordinate(request)
-print(files)
+measurement_iterators = fetch_data_single_topic_single_coordinate(request)
+for measurement_iterator in measurement_iterators:
+    for observation in measurement_iterator:
+        print(observation)
 ```
 
 `noaa_api.py` contains the curated `TOPICS` mapping from application topic
@@ -71,9 +73,11 @@ print(topic_names)
 
 Run the fixed live example with `python noaa_test.py`. It requests
 temperature near Washington, DC from January through May 2020 and displays
-the returned records. Each output entry is one measured variable with shared
-lowercase station metadata keys, a numeric `value`, and a lowercase
-`description` such as `tmax` or `tmin`.
+the returned records. The function returns a list of iterators, one per
+variable (for example, `tmax` and `tmin`). Each iterator yields date-by-date
+records with shared lowercase station metadata keys, a numeric `value`, and a
+lowercase `description` naming that variable. Iterators stream their records
+from the nested JSON file saved under `data/noaa_test/`.
 
 ## Add another provider
 

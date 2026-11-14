@@ -15,8 +15,9 @@ from __future__ import annotations
 import json
 import sys
 from datetime import date
+from itertools import islice
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from api_wrapper import PointDataRequest, fetch_data_single_topic_single_coordinate
 from noaa_api import NOAAError
@@ -35,39 +36,44 @@ OUTPUT_DIR: Path = Path("data/noaa_test")
 """Directory for the saved NOAA response."""
 
 MAX_PREVIEW_RECORDS: int = 10
-"""Maximum number of returned records printed to the console."""
+"""Maximum number of records printed for each measurement collection."""
 
 
-def display_response(path: Path, *, max_records: int = MAX_PREVIEW_RECORDS) -> None:
-    """Print a bounded preview of a saved JSON response.
+def display_data(
+    collections: list[Iterator[dict[str, Any]]],
+    *,
+    max_records: int = MAX_PREVIEW_RECORDS,
+) -> None:
+    """Print a bounded preview of per-variable observation iterators.
 
-    :param path: Path to the NOAA response JSON file.
-    :type path: pathlib.Path
+    :param collections: Per-variable observation iterators from the API wrapper.
+    :type collections: list[typing.Iterator[dict[str, typing.Any]]]
     :param max_records: Maximum number of observation records to print.
     :type max_records: int
     :returns: ``None``. Output is written to standard output.
     :rtype: None
     """
-    with path.open("r", encoding="utf-8") as response_file:
-        payload: Any = json.load(response_file)
-    records: Any = payload.get("results", payload) if isinstance(payload, dict) else payload
-    print(f"\n--- NOAA response: {path} ---")
-    if isinstance(records, list):
-        print(f"Returned {len(records)} record(s); showing up to {max_records}:")
-        record: Any
-        for record in records[:max_records]:
+    print(f"\nReturned {len(collections)} measurement iterator(s):")
+    collection: Iterator[dict[str, Any]]
+    for index, collection in enumerate(collections, start=1):
+        preview: list[dict[str, Any]] = list(islice(collection, max_records))
+        if not preview:
+            continue
+        description: str = preview[0]["description"]
+        print(
+            f"\nCollection {index} ({description}); "
+            f"showing up to {max_records} record(s):"
+        )
+        record: dict[str, Any]
+        for record in preview:
             print(json.dumps(record, ensure_ascii=False, indent=2))
-    else:
-        print(json.dumps(payload, ensure_ascii=False, indent=2)[:8000])
-        if len(json.dumps(payload, ensure_ascii=False)) > 8000:
-            print("... (preview limited to 8,000 characters)")
 
 
-def run_noaa_test() -> list[Path]:
+def run_noaa_test() -> None:
     """Fetch the fixed NOAA request and show its returned records.
 
-    :returns: Paths to saved NOAA JSON responses.
-    :rtype: list[pathlib.Path]
+    :returns: ``None``. Displays observations while consuming the iterators.
+    :rtype: None
     :raises NOAAError: If the NOAA service rejects or fails the request.
     :raises ValueError: If the request parameters are invalid.
     """
@@ -76,14 +82,27 @@ def run_noaa_test() -> list[Path]:
         f"  topic={REQUEST.topic}, coordinate=({REQUEST.latitude}, "
         f"{REQUEST.longitude}), dates={REQUEST.start_date} to {REQUEST.end_date}"
     )
-    paths: list[Path] = fetch_data_single_topic_single_coordinate(
-        REQUEST,
-        provider="noaa",
-        output_dir=OUTPUT_DIR,
+
+    request_result = fetch_data_single_topic_single_coordinate(
+                REQUEST,
+                provider="noaa",
+                output_dir=OUTPUT_DIR,
+            )
+
+    for value_type in request_result:
+        print(list(value_type))
+        for measurement in value_type:
+            print(measurement)
+       
+    collections: list[Iterator[dict[str, Any]]] = (
+        fetch_data_single_topic_single_coordinate(
+            REQUEST,
+            provider="noaa",
+            output_dir=OUTPUT_DIR,
+        )
     )
-    for path in paths:
-        display_response(path)
-    return paths
+    print(f"Saved JSON response under {OUTPUT_DIR}/")
+    display_data(collections)
 
 
 def main() -> int:
