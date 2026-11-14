@@ -1794,7 +1794,8 @@
         const lo = Math.min(...all);
         const hi = Math.max(...all);
         const domain = [Math.floor(lo) - 0.6, Math.ceil(hi) + 0.6];
-        const perDay = unit ? `${unit}/day` : 'per day';
+        // "per day" in words, so rate units (mm/day) don't read as "mm/day/day".
+        const perDay = unit ? `${unit} per day` : 'per day';
         return {
             kind: 'year', height: 210, xDomain: domain,
             xTicks: (plotW, shown = domain) => {
