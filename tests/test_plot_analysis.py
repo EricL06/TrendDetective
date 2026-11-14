@@ -37,5 +37,27 @@ class AnalyzeSeriesTest(unittest.TestCase):
             plot_analysis.analyze_series([1, 2, 3], [1, 2, 3], ["Fourier"])
 
 
+
+class AnalyzeGroupsTest(unittest.TestCase):
+    def test_each_group_gets_its_own_regression(self) -> None:
+        days = list(range(31))
+        groups = [
+            {"key": 2020, "x": days, "values": [0.1 * d for d in days]},
+            {"key": 2021, "x": days, "values": [5 - 0.2 * d for d in days]},
+        ]
+        result = plot_analysis.analyze_groups(groups, ["Linear Regression"])
+        self.assertEqual([g["key"] for g in result["groups"]], [2020, 2021])
+        self.assertAlmostEqual(result["groups"][0]["tools"]["Linear Regression"]["slope"], 0.1, places=3)
+        self.assertAlmostEqual(result["groups"][1]["tools"]["Linear Regression"]["slope"], -0.2, places=3)
+
+    def test_short_group_is_reported_not_raised(self) -> None:
+        result = plot_analysis.analyze_groups([{"key": 1, "x": [0], "values": [1.0]}], ["Linear Regression"])
+        self.assertFalse(result["groups"][0]["tools"]["Linear Regression"]["available"])
+
+    def test_groups_must_be_a_list(self) -> None:
+        with self.assertRaises(plot_analysis.AnalysisError):
+            plot_analysis.analyze_groups({"x": []})
+
+
 if __name__ == "__main__":
     unittest.main()

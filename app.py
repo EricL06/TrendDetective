@@ -162,7 +162,9 @@ class WebAppHandler(SimpleHTTPRequestHandler):
         """Run analysis tools on a series sent by the plot panel (``POST /api/analyze``).
 
         Expects ``{"x": [...], "values": [...], "tools": [...]}`` and answers
-        with :func:`plot_analysis.analyze_series`.
+        with :func:`plot_analysis.analyze_series`, or ``{"groups": [{"key",
+        "x", "values"}, ...], "tools": [...]}`` (one series per year) and
+        answers with :func:`plot_analysis.analyze_groups`.
 
         :return: None
         :rtype: None
@@ -172,9 +174,12 @@ class WebAppHandler(SimpleHTTPRequestHandler):
             body = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
             if not isinstance(body, dict):
                 raise plot_analysis.AnalysisError("Body must be a JSON object.")
-            result = plot_analysis.analyze_series(
-                body.get("x", []), body.get("values", []), body.get("tools")
-            )
+            if "groups" in body:
+                result = plot_analysis.analyze_groups(body["groups"], body.get("tools"))
+            else:
+                result = plot_analysis.analyze_series(
+                    body.get("x", []), body.get("values", []), body.get("tools")
+                )
         except (json.JSONDecodeError, ValueError) as exc:
             self._send_json(400, {"error": str(exc)})
             return

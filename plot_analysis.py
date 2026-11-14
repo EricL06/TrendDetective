@@ -25,6 +25,9 @@ from src.task import (
 MAX_POINTS: int = 10_000
 """Largest series accepted from the frontend."""
 
+MAX_GROUPS: int = 500
+"""Most groups (e.g. one per year) accepted in one call to :func:`analyze_groups`."""
+
 
 class AnalysisError(ValueError):
     """Raised when the posted series cannot be analysed."""
@@ -168,4 +171,41 @@ def analyze_series(
     }
 
 
-__all__ = ["AnalysisError", "analyze_series"]
+def analyze_groups(
+    groups: Sequence[Any],
+    tools: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Run the selected tools separately on several series, e.g. one per year.
+
+    The plot panel uses this to analyse a time frame such as January inside
+    every year on its own: each group holds the values of one January and
+    ``x`` is the day within that January, so a linear-regression slope is
+    "per day within the period".
+
+    :param groups: List of ``{"x": [...], "values": [...]}``; an optional
+        ``"key"`` (e.g. the year) is passed back unchanged.
+    :param tools: As for :func:`analyze_series`.
+    :return: ``{"groups": [{"key": ..., "observations": n, "tools": {...}}]}``
+        in the order given.
+    :raises AnalysisError: If a group is malformed, there are too many groups
+        or more than :data:`MAX_POINTS` values in total.
+    """
+    if not isinstance(groups, (list, tuple)):
+        raise AnalysisError("groups must be a list.")
+    if len(groups) > MAX_GROUPS:
+        raise AnalysisError(f"At most {MAX_GROUPS} groups can be analysed at once.")
+    total = 0
+    results: list[dict[str, Any]] = []
+    for group in groups:
+        if not isinstance(group, dict):
+            raise AnalysisError("Each group must be an object with x and values.")
+        values = group.get("values", [])
+        total += len(values) if isinstance(values, (list, tuple)) else 0
+        if total > MAX_POINTS:
+            raise AnalysisError(f"At most {MAX_POINTS} points can be analysed.")
+        result = analyze_series(group.get("x", []), values, tools)
+        results.append({"key": group.get("key"), **result})
+    return {"groups": results}
+
+
+__all__ = ["AnalysisError", "analyze_groups", "analyze_series"]

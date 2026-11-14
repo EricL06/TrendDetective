@@ -6,10 +6,16 @@
  *     shaded in every year and its points are emphasised.
  *   - Years overlaid: every year as its own line on a Jan..Dec axis, so the
  *     same time frame of different years lies on top of each other.
- *   - Period across years: one value per year (the mean of the chosen period)
- *     with the analysis tools of src/task.py run on that series.
+ *   - Period across years: one value per year (the mean of a time frame,
+ *     e.g. January) for every analysis time frame.
+ * Analyses: any number of time frames (whole series, a month, a season, the
+ * whole year or a custom DD.MM – DD.MM range), each with its own selection of
+ * the analysis tools of src/task.py. For a period a tool runs inside every
+ * year's period on its own (e.g. a linear regression over 1–31 January 2014,
+ * another over January 2015, …); the per-year lines are drawn into the plot
+ * and the slopes are compared year by year below it.
  * Functions: anomaly (deviation from the multi-year mean of the same time of
- * year), moving average, linear trend, multi-year mean ± 1σ, zoom to period.
+ * year), moving average, multi-year mean ± 1σ, zoom to period.
  *
  * Public API (window.TrendPlots):
  *   mount(element)                       build the panel inside `element`
@@ -57,6 +63,11 @@
         { id: 'custom', label: 'Custom (DD.MM – DD.MM)…' },
     ];
 
+    const DEFAULT_TOOLS = ['Linear Regression', 'Mann-Kendall', 't-Test'];
+    const TOOL_SHORT = { 'Linear Regression': 'Linear regression', 'Mann-Kendall': 'Mann-Kendall', 't-Test': 't-Test' };
+    // One colour per analysis time frame (distinct from the blue data series and the year ramp).
+    const WINDOW_COLORS = ['#eb6834', '#1a9e74', '#c2399b', '#8f6a00', '#6250d6', '#d1394a'];
+
     const VIEWS = [
         { id: 'timeline', label: 'Timeline' },
         { id: 'overlay', label: 'Years overlaid' },
@@ -72,7 +83,11 @@
         view: 'timeline',
         periodId: 'none',
         custom: { start: '01.06', end: '31.08' },
-        fn: { anomaly: false, ma: false, maWindow: 3, trend: true, clim: false, zoom: false },
+        fn: { anomaly: false, ma: false, maWindow: 3, clim: false, zoom: false },
+        tools: DEFAULT_TOOLS.slice(),
+        // Analysis time frames: frame is 'all' (whole series) or a PERIOD_PRESETS id.
+        windows: [{ id: 1, frame: 'all', custom: { start: '01.06', end: '31.08' }, tools: DEFAULT_TOOLS.slice() }],
+        nextWindowId: 2,
         hiddenYears: new Set(),
         zoom: null,
         showTable: false,
@@ -219,6 +234,117 @@
 
     function seasonYearLabel(year, period) {
         return period && period.wraps ? `${year - 1}/${String(year).slice(-2)}` : String(year);
+    }
+
+    function presetPeriod(id, custom) {
+        const preset = PERIOD_PRESETS.find((p) => p.id === id);
+        if (!preset || preset.id === 'none') return null;
+        if (preset.id === 'custom') {
+            const a = parseDayMonth(custom.start);
+            const b = parseDayMonth(custom.end);
+            if (!a || !b) return { invalid: true };
+            return makePeriod(a, b, `${custom.start}–${custom.end}`);
+        }
+        return makePeriod(preset.start, preset.end, preset.label.replace(/ \(.*\)$/, ''));
+    }
+
+    function windowColor(w) {
+        return WINDOW_COLORS[(state.windows.indexOf(w) % WINDOW_COLORS.length + WINDOW_COLORS.length) % WINDOW_COLORS.length];
+    }
+
+    // Rows of the whole series for the analysis tools; x is the decimal year.
+    function wholeSeriesRows(model) {
+        return model.points
+            .map((pt) => ({ year: 1970 + pt.t / (365.2425 * DAY_MS), t: pt.t, label: timeLabel(model, pt.t), mean: transformed(model, pt), complete: true }))
+            .filter((row) => isNum(row.mean));
+    }
+
+    function yearToTime(x) {
+        return (x - 1970) * 365.2425 * DAY_MS;
+    }
+
+    // Everything one analysis time frame needs: its per-year rows and the tool results.
+    function evaluateWindows(model) {
+        const canCompare = model.canCompare && model.years.length >= 2;
+        return state.windows.map((w) => {
+            const color = windowColor(w);
+            const period = w.frame === 'all' ? null : presetPeriod(w.frame, w.custom);
+            const base = { w, color, period, tools: state.tools.filter((t) => w.tools.includes(t)) };
+            if (period && period.invalid) return { ...base, label: 'Custom period', status: 'Enter the period as DD.MM – DD.MM, e.g. 01.06 – 31.08.', rows: [], allRows: [] };
+            if (period && !canCompare) {
+                return { ...base, label: period.label, status: model.canCompare ? 'Needs a time range over at least two years.' : `Needs intervals of up to 2 months; the current interval is ${model.ivText}.`, rows: [], allRows: [] };
+            }
+            const label = period ? period.label : 'Whole series';
+            if (!period) {
+                // Whole series: one analysis over every interval.
+                const allRows = wholeSeriesRows(model);
+                const rows = allRows;
+                let analysis = null;
+                let status = null;
+                if (!base.tools.length) status = 'No tool selected for this time frame.';
+                else if (rows.length < 2) status = 'Needs at least two values.';
+                else {
+                    const key = JSON.stringify([state.topic, base.tools, rows.map((row) => [row.year, row.mean])]);
+                    if (!state.analysisCache.has(key)) requestAnalysis(key, { x: rows.map((row) => row.year), values: rows.map((row) => row.mean) });
+                    analysis = state.analysisCache.get(key);
+                }
+                const results = analysis && !analysis.pending && !analysis.error ? analysis.tools || {} : null;
+                return { ...base, label, rows, allRows, years: [], analysis, results, status };
+            }
+
+            // A period (e.g. January): the tools run inside every year's period on its own,
+            // x = days since the period started that year.
+            const allRows = periodSeries(model, period);
+            const rows = allRows.filter((row) => row.complete);
+            const lengthDays = periodLengthDays(period);
+            const years = allRows.map((row) => {
+                const startT = Date.UTC(period.wraps ? row.year - 1 : row.year, period.start[0] - 1, period.start[1]);
+                const pts = model.points
+                    .filter((p) => inPeriod(p, period) && seasonYear(p, period) === row.year)
+                    .map((p) => ({ t: p.t, pos: p.pos, x: (p.t - startT) / DAY_MS, y: transformed(model, p) }))
+                    .filter((q) => isNum(q.y));
+                return { ...row, startT, pts, res: null };
+            });
+            const analysed = years.filter((yr) => yr.complete);
+            let analysis = null;
+            let status = null;
+            if (!base.tools.length) status = 'No tool selected for this time frame.';
+            else if (!analysed.length) status = 'No year has enough data in this time frame.';
+            else if (analysed.every((yr) => yr.pts.length < 3)) status = `Each ${label} has fewer than three values. Choose a shorter interval (e.g. 1 Day) to analyse inside the period.`;
+            else {
+                const groups = analysed.map((yr) => ({ key: yr.year, x: yr.pts.map((q) => +q.x.toFixed(3)), values: yr.pts.map((q) => q.y) }));
+                const key = JSON.stringify([state.topic, base.tools, 'groups', groups]);
+                if (!state.analysisCache.has(key)) requestAnalysis(key, { groups });
+                analysis = state.analysisCache.get(key);
+                if (analysis && analysis.groups) {
+                    const byKey = new Map(analysis.groups.map((g) => [g.key, g.tools]));
+                    for (const yr of years) yr.res = byKey.get(yr.year) || null;
+                }
+            }
+            const results = analysis && !analysis.pending && !analysis.error ? {} : null;
+            return { ...base, label, rows, allRows, years, lengthDays, analysis, results, status };
+        });
+    }
+
+    function periodLengthDays(period) {
+        const a = yearPos(period.start[0], period.start[1]);
+        let b = yearPos(period.end[0], period.end[1]) + 1;
+        if (b <= a) b += YEAR_DAYS;
+        return b - a;
+    }
+
+    // Fitted regression values at a year's points; split where the x position jumps back
+    // (a period across New Year on an axis that starts in January).
+    function fittedPieces(yr, lr, xOf) {
+        const pieces = [];
+        let cur = [];
+        for (const q of yr.pts) {
+            const x = xOf(q);
+            if (cur.length && x < cur[cur.length - 1].x) { pieces.push(cur); cur = []; }
+            cur.push({ x, y: lr.slope * q.x + lr.intercept });
+        }
+        if (cur.length) pieces.push(cur);
+        return pieces.filter((piece) => piece.length >= 2);
     }
 
     function buildModel() {
@@ -397,7 +523,7 @@
         return `${abs - MONTH_START[m] + 1} ${MONTHS[m]}`;
     }
 
-    function buildTimeline(model, period) {
+    function buildTimeline(model, period, wins) {
         const series = [];
         const legend = [];
         const unit = model.unit;
@@ -445,15 +571,41 @@
             legend.push({ name: `Moving average over ${w} intervals`, color: COLOR.movingAverage, style: 'line' });
         }
 
-        if (state.fn.trend) {
-            const fit = ols(pts.map((p) => ({ x: p.x / (YEAR_DAYS * DAY_MS), y: p.y })));
-            if (fit && pts.length >= 2) {
-                const xs = [pts[0].x, pts[pts.length - 1].x];
+        // Analysis time frames: a period's regression is drawn inside every year's period on its own;
+        // the whole series gets one line (and the early / late means of its t-Test).
+        for (const win of wins || []) {
+            const res = win.results || {};
+            if (win.period) {
+                let drawn = 0;
+                for (const yr of win.years) {
+                    const lr = yr.res && yr.res['Linear Regression'];
+                    if (!lr || !lr.available) continue;
+                    for (const piece of fittedPieces(yr, lr, (q) => q.t)) {
+                        series.push({ id: `win${win.w.id}-${yr.year}-${drawn}`, kind: 'line', name: `${win.label} ${yr.label}: linear regression`, color: win.color, width: 2.5, points: piece, hover: false });
+                        drawn += 1;
+                    }
+                }
+                if (drawn) legend.push({ name: `${win.label}: linear regression inside each year`, color: win.color, style: 'line' });
+                continue;
+            }
+            if (!win.rows.length) continue;
+            const lr = res['Linear Regression'];
+            const tt = res['t-Test'];
+            const first = win.rows[0];
+            const last = win.rows[win.rows.length - 1];
+            if (lr && lr.available) {
                 series.push({
-                    id: 'trend', kind: 'line', name: 'Linear trend', color: COLOR.reference, width: 2, dash: '6,4',
-                    points: xs.map((x) => ({ x, y: fit.slope * (x / (YEAR_DAYS * DAY_MS)) + fit.intercept })), hover: false,
+                    id: `win${win.w.id}-lr`, kind: 'line', name: `${win.label}: linear regression`, color: win.color, width: 2, dash: '6,4',
+                    points: [first, last].map((row) => ({ x: row.t, y: lr.slope * row.year + lr.intercept })), hover: false,
                 });
-                legend.push({ name: `Linear trend (${withUnit(fmtSigned(fit.slope), unit)} per year)`, color: COLOR.reference, style: 'dash' });
+                legend.push({ name: `${win.label}: linear regression (${withUnit(fmtSigned(lr.slope), unit)} per year)`, color: win.color, style: 'dash' });
+            }
+            if (tt && tt.available) {
+                const split = win.rows.find((row) => row.year === tt.split_x) || win.rows[Math.floor(win.rows.length / 2)];
+                const splitT = isNum(split.t) ? split.t : yearToTime(tt.split_x);
+                series.push({ id: `win${win.w.id}-tt1`, kind: 'line', name: `${win.label}: early mean`, color: win.color, width: 2.5, dash: '1,3', points: [{ x: first.t, y: tt.early_mean }, { x: splitT, y: tt.early_mean }], hover: false });
+                series.push({ id: `win${win.w.id}-tt2`, kind: 'line', name: `${win.label}: late mean`, color: win.color, width: 2.5, dash: '1,3', points: [{ x: splitT, y: tt.late_mean }, { x: last.t, y: tt.late_mean }], hover: false });
+                legend.push({ name: `${win.label}: t-Test early vs. late mean (${withUnit(fmtSigned(tt.late_mean - tt.early_mean), unit)})`, color: win.color, style: 'dash' });
             }
         }
 
@@ -470,7 +622,7 @@
         };
     }
 
-    function buildOverlay(model, period) {
+    function buildOverlay(model, period, wins) {
         const unit = model.unit;
         const usePeriod = period && !period.invalid ? period : null;
         const offset = usePeriod && usePeriod.wraps ? yearPos(usePeriod.start[0], usePeriod.start[1]) : 0;
@@ -527,12 +679,32 @@
             });
         }
 
+        // Each year's regression inside every analysis period, in that year's colour.
+        for (const win of wins || []) {
+            if (!win.period) continue;
+            let drawn = 0;
+            for (const yr of win.years) {
+                const lr = yr.res && yr.res['Linear Regression'];
+                if (!lr || !lr.available) continue;
+                // Years are keyed by the highlight period's season year; a point decides which line it belongs to.
+                const lineYear = yr.pts.length ? seasonYear(model.points.find((p) => p.t === yr.pts[0].t), usePeriod) : yr.year;
+                if (state.hiddenYears.has(lineYear)) continue;
+                for (const piece of fittedPieces(yr, lr, (q) => xOf(q.pos))) {
+                    series.push({ id: `win${win.w.id}-${yr.year}-${drawn}`, kind: 'line', name: `${win.label} ${yr.label}: regression`, color: yearColor(colorModel, lineYear), width: 2.5, dash: '6,3', points: piece.filter((q) => inDomain(q.x)), hover: false });
+                    drawn += 1;
+                }
+            }
+        }
+
         const legend = allYears.map((y) => ({
             name: seasonYearLabel(y, usePeriod), color: yearColor(colorModel, y), style: 'line', toggleYear: y,
             pressed: !state.hiddenYears.has(y),
         }));
         if (state.fn.clim && model.years.length >= 2) legend.push({ name: `Multi-year mean ± 1σ${model.monthly ? '' : ` (${CLIM_SMOOTH_DAYS}-day window)`}`, color: COLOR.reference, style: 'band' });
         if (usePeriod && !state.fn.zoom) legend.push({ name: `${usePeriod.label} (highlighted)`, color: COLOR.accent, style: 'band-accent' });
+        if ((wins || []).some((win) => win.period && win.years.some((yr) => yr.res && yr.res['Linear Regression'] && yr.res['Linear Regression'].available))) {
+            legend.push({ name: 'Dashed: linear regression inside each year\u2019s analysis period (colour of the year)', color: COLOR.reference, style: 'dash' });
+        }
 
         // Table: one row per position in the year, one column per year.
         const xs = [...new Set(series.filter((s) => s.id.startsWith('y')).flatMap((s) => s.points.map((p) => Math.round(p.x * 10) / 10)))].sort((a, b) => a - b);
@@ -565,7 +737,7 @@
             if (!inPeriod(p, period)) continue;
             const sy = seasonYear(p, period);
             if (!groups.has(sy)) groups.set(sy, []);
-            groups.get(sy).push(transformed(model, p));
+            groups.get(sy).push({ v: transformed(model, p), t: p.t });
         }
         const startPos = yearPos(period.start[0], period.start[1]);
         let endPos = yearPos(period.end[0], period.end[1]) + 1;
@@ -573,10 +745,11 @@
         const expected = Math.max(1, Math.round((endPos - startPos) / model.stepDays));
         return [...groups.entries()]
             .sort((a, b) => a[0] - b[0])
-            .map(([year, vals]) => {
-                const v = vals.filter(isNum);
+            .map(([year, items]) => {
+                const v = items.map((it) => it.v).filter(isNum);
                 return {
                     year, label: seasonYearLabel(year, period), n: v.length, expected,
+                    t: mean(items.filter((it) => isNum(it.v)).map((it) => it.t)),
                     complete: v.length >= Math.max(1, Math.floor(expected * 0.5)),
                     mean: mean(v), min: v.length ? Math.min(...v) : null, max: v.length ? Math.max(...v) : null,
                 };
@@ -584,7 +757,7 @@
             .filter((r) => r.n > 0);
     }
 
-    function buildPeriod(model, period, analysis) {
+    function buildPeriod(model, period, analysis, color) {
         const unit = model.unit;
         const rows = periodSeries(model, period);
         const series = [];
@@ -620,17 +793,17 @@
         }
 
         const lr = analysis && analysis.tools && analysis.tools['Linear Regression'];
-        if (state.fn.trend && lr && lr.available && used.length >= 2) {
+        if (lr && lr.available && used.length >= 2) {
             const xs = [used[0].year, used[used.length - 1].year];
-            series.push({ id: 'trend', kind: 'line', name: 'Linear trend', color: COLOR.reference, width: 2, dash: '6,4', points: xs.map((x) => ({ x, y: lr.slope * x + lr.intercept })), hover: false });
-            legend.push({ name: `Linear trend (${withUnit(fmtSigned(lr.slope), unit)} per year)`, color: COLOR.reference, style: 'dash' });
+            series.push({ id: 'trend', kind: 'line', name: 'Linear regression', color: color || COLOR.reference, width: 2, dash: '6,4', points: xs.map((x) => ({ x, y: lr.slope * x + lr.intercept })), hover: false });
+            legend.push({ name: `Linear regression (${withUnit(fmtSigned(lr.slope), unit)} per year)`, color: color || COLOR.reference, style: 'dash' });
         }
         const tt = analysis && analysis.tools && analysis.tools['t-Test'];
         if (tt && tt.available && used.length >= 4) {
             const split = tt.split_x;
-            series.push({ id: 'early', kind: 'line', name: 'Early mean (t-Test)', color: COLOR.accent, width: 2, dash: '1,3', points: [{ x: used[0].year - 0.3, y: tt.early_mean }, { x: split - 0.5, y: tt.early_mean }], hover: false });
-            series.push({ id: 'late', kind: 'line', name: 'Late mean (t-Test)', color: COLOR.accent, width: 2, dash: '1,3', points: [{ x: split - 0.5, y: tt.late_mean }, { x: used[used.length - 1].year + 0.3, y: tt.late_mean }], hover: false });
-            legend.push({ name: 't-Test: mean of the early vs. late years', color: COLOR.accent, style: 'dash' });
+            series.push({ id: 'early', kind: 'line', name: 'Early mean (t-Test)', color: color || COLOR.accent, width: 2, dash: '1,3', points: [{ x: used[0].year - 0.3, y: tt.early_mean }, { x: split - 0.5, y: tt.early_mean }], hover: false });
+            series.push({ id: 'late', kind: 'line', name: 'Late mean (t-Test)', color: color || COLOR.accent, width: 2, dash: '1,3', points: [{ x: split - 0.5, y: tt.late_mean }, { x: used[used.length - 1].year + 0.3, y: tt.late_mean }], hover: false });
+            legend.push({ name: 't-Test: mean of the early vs. late years', color: color || COLOR.accent, style: 'dash' });
         }
 
         return {
@@ -651,6 +824,40 @@
             rows, used, overall, sd,
             table: tableFrom(['Year', `Mean${unit ? ` (${unit})` : ''}`, 'Min', 'Max', 'Intervals', 'Complete'],
                 rows.map((r) => [r.label, r.mean, r.min, r.max, `${r.n}/${r.expected}`, r.complete ? 'yes' : 'no'])),
+        };
+    }
+
+    // Several analysis time frames on one year axis: one line per time frame with its tool results.
+    function buildPeriodMulti(model, wins) {
+        const unit = model.unit;
+        const series = [];
+        const legend = [];
+        const years = [...new Set(wins.flatMap((win) => win.allRows.map((row) => row.year)))].sort((a, b) => a - b);
+        const domain = years.length ? [years[0] - 0.6, years[years.length - 1] + 0.6] : [0, 1];
+        for (const win of wins) {
+            series.push({
+                id: `win${win.w.id}`, kind: 'line', name: `${win.label} mean`, color: win.color, width: 1.8,
+                points: win.allRows.map((row) => ({ x: row.year, y: row.mean, meta: { ...row, win: win.label } })), gap: 1.5, markers: 4.5,
+                hollow: (q) => !q.meta.complete,
+            });
+            legend.push({ name: `${win.label} mean per year`, color: win.color, style: 'dot' });
+        }
+        if (wins.some((win) => win.allRows.some((row) => !row.complete))) legend.push({ name: 'Incomplete year (less than half of the period has data; not analysed)', color: COLOR.series, style: 'hollow' });
+        const byYear = wins.map((win) => new Map(win.allRows.map((row) => [row.year, row.mean])));
+        return {
+            kind: 'year',
+            xDomain: domain,
+            xTicks: (plotW, shown = domain) => {
+                const visible = years.filter((y) => y >= shown[0] - 0.01 && y <= shown[1] + 0.01);
+                const every = Math.max(1, Math.ceil(visible.length / Math.max(2, Math.floor(plotW / 44))));
+                return visible.filter((_, i) => i % every === 0).map((y) => ({ v: y, label: String(y) }));
+            },
+            formatX: (x) => String(Math.round(x)),
+            series, bands: [], legend, unit,
+            yInclude: state.fn.anomaly ? [0] : [],
+            tooltipExtra: (row) => (row.meta && row.meta.win ? `${row.meta.win} ${row.meta.label}: ${row.meta.n}/${row.meta.expected} intervals${row.meta.complete ? '' : ' (incomplete)'}` : ''),
+            table: tableFrom(['Year', ...wins.map((win) => `${win.label} mean${unit ? ` (${unit})` : ''}`)],
+                years.map((y) => [String(y), ...byYear.map((m) => m.get(y) ?? null)])),
         };
     }
 
@@ -967,10 +1174,10 @@
             <button type="button" class="tp-chip" data-fn="anomaly" title="Subtract the multi-year mean of the same time of year (needs ≥ 2 years)">Anomaly</button>
             <button type="button" class="tp-chip" data-fn="ma" title="Centred moving average">Moving average
                 <input type="number" min="2" max="60" step="1" data-ref="maWindow" aria-label="Moving average window"></button>
-            <button type="button" class="tp-chip" data-fn="trend" title="Least-squares line">Linear trend</button>
             <button type="button" class="tp-chip" data-fn="clim" title="Mean and ±1 standard deviation over all years (needs ≥ 2 years)">Multi-year mean ± σ</button>
             <button type="button" class="tp-chip" data-fn="zoom" title="Show only the highlighted period (Years overlaid)">Zoom to period</button>
         </div>
+        <div class="tp-windows" data-ref="windows" aria-label="Analysis time frames"></div>
         <div data-ref="hint"></div>
         <div class="tp-chart" data-ref="chart"></div>
         <div class="tp-legend" data-ref="legend"></div>
@@ -995,7 +1202,7 @@
             const b = e.target.closest('button[data-view]');
             if (!b || b.disabled) return;
             state.view = b.dataset.view;
-            if (state.view === 'period' && state.periodId === 'none') state.periodId = 'm1';
+            if (state.view === 'period' && state.periodId === 'none' && !state.windows.some((w) => w.frame !== 'all')) state.periodId = 'm1';
             render();
         });
         refs.period.addEventListener('change', () => { state.periodId = refs.period.value; state.hiddenYears.clear(); render(); });
@@ -1036,6 +1243,55 @@
             else state.hiddenYears.add(y);
             render();
         });
+        refs.windows.addEventListener('change', (e) => {
+            const row = e.target.closest('[data-window]');
+            const w = row && state.windows.find((x) => x.id === Number(row.dataset.window));
+            if (!w) return;
+            if (e.target.matches('select[data-w="frame"]')) {
+                w.frame = e.target.value;
+                renderWindowsEditor();
+                render();
+            } else if (e.target.matches('input[data-tool]')) {
+                const tool = e.target.dataset.tool;
+                w.tools = e.target.checked ? [...new Set([...w.tools, tool])] : w.tools.filter((t) => t !== tool);
+                render();
+            }
+        });
+        refs.windows.addEventListener('input', (e) => {
+            if (!e.target.matches('input[data-w]')) return;
+            const row = e.target.closest('[data-window]');
+            const w = row && state.windows.find((x) => x.id === Number(row.dataset.window));
+            if (!w) return;
+            w.custom[e.target.dataset.w] = e.target.value;
+            e.target.setAttribute('aria-invalid', String(!parseDayMonth(e.target.value)));
+            render();
+        });
+        refs.windows.addEventListener('click', (e) => {
+            const btn = e.target.closest('button[data-action]');
+            if (!btn) return;
+            if (btn.dataset.action === 'add') {
+                const used = new Set(state.windows.map((w) => w.frame));
+                const frame = PERIOD_PRESETS.filter((p) => p.group === 'Months').map((p) => p.id).find((id) => !used.has(id)) || 'm1';
+                state.windows.push({ id: state.nextWindowId++, frame, custom: { start: '01.06', end: '31.08' }, tools: ['Linear Regression'] });
+            } else if (btn.dataset.action === 'remove') {
+                const id = Number(btn.closest('[data-window]').dataset.window);
+                state.windows = state.windows.filter((w) => w.id !== id);
+            }
+            renderWindowsEditor();
+            render();
+        });
+        fetch('/api/tools')
+            .then((res) => (res.ok ? res.json() : null))
+            .then((body) => {
+                if (body && Array.isArray(body.tools) && body.tools.length) {
+                    state.tools = body.tools.slice();
+                    renderWindowsEditor();
+                    render();
+                }
+            })
+            .catch(() => {});
+        renderWindowsEditor();
+
         refs.tableBtn.addEventListener('click', () => { state.showTable = !state.showTable; render(); });
         refs.csvBtn.addEventListener('click', downloadCsv);
 
@@ -1043,6 +1299,39 @@
             new ResizeObserver(() => layoutChart(refs.chart)).observe(refs.chart);
         }
         render();
+    }
+
+    function frameOptions(selected) {
+        const opt = (id, label) => `<option value="${id}"${id === selected ? ' selected' : ''}>${esc(label)}</option>`;
+        return opt('all', 'Whole series')
+            + opt('year', 'Whole year (annual mean)')
+            + `<optgroup label="Months">${PERIOD_PRESETS.filter((p) => p.group === 'Months').map((p) => opt(p.id, p.label)).join('')}</optgroup>`
+            + `<optgroup label="Seasons">${PERIOD_PRESETS.filter((p) => p.group === 'Seasons').map((p) => opt(p.id, p.label)).join('')}</optgroup>`
+            + opt('custom', 'Custom (DD.MM – DD.MM)…');
+    }
+
+    // The list of analysis time frames; rebuilt only when frames are added, removed or changed,
+    // so typing in a custom period keeps the focus.
+    function renderWindowsEditor() {
+        const host = state.refs.windows;
+        if (!host) return;
+        const rows = state.windows.map((w) => {
+            const color = windowColor(w);
+            const tools = state.tools.map((t) => `<label class="tp-tool${w.tools.includes(t) ? ' is-on' : ''}"><input type="checkbox" data-tool="${esc(t)}"${w.tools.includes(t) ? ' checked' : ''}>${esc(TOOL_SHORT[t] || t)}</label>`).join('');
+            const custom = w.frame === 'custom'
+                ? `<span class="tp-inline"><input class="tp-md" data-w="start" maxlength="5" placeholder="DD.MM" aria-label="Time frame start (DD.MM)" value="${esc(w.custom.start)}" aria-invalid="${!parseDayMonth(w.custom.start)}"><span>–</span><input class="tp-md" data-w="end" maxlength="5" placeholder="DD.MM" aria-label="Time frame end (DD.MM)" value="${esc(w.custom.end)}" aria-invalid="${!parseDayMonth(w.custom.end)}"></span>`
+                : '';
+            return `<div class="tp-window" data-window="${w.id}" style="--tp-win:${color}">
+                <span class="tp-window-swatch" aria-hidden="true"></span>
+                <select data-w="frame" aria-label="Time frame">${frameOptions(w.frame)}</select>
+                ${custom}
+                <span class="tp-window-tools" role="group" aria-label="Tools for this time frame">${tools}</span>
+                <button type="button" class="tp-window-remove" data-action="remove" title="Remove this time frame" aria-label="Remove this time frame">×</button>
+            </div>`;
+        }).join('');
+        host.innerHTML = `<div class="tp-windows-head"><span class="tp-chip-label">Analyses</span><span class="tp-windows-note">For a period such as January, each tool runs inside every year's January on its own; the results are compared year by year.</span></div>
+            ${rows}
+            <button type="button" class="tp-link-btn tp-window-add" data-action="add">+ Add time frame</button>`;
     }
 
     function setData(visualization, userRequest) {
@@ -1095,7 +1384,6 @@
         const period = currentPeriod();
         const canCompare = model.canCompare && model.years.length >= 2;
         if (!canCompare && state.view !== 'timeline') state.view = 'timeline';
-        if (state.view === 'period' && (!period || period.invalid)) state.view = period && period.invalid ? 'period' : 'timeline';
         setControlStates(model, period);
 
         const st = model.info.station;
@@ -1125,22 +1413,18 @@
         }
 
         const usablePeriod = period && !period.invalid ? period : null;
-        // Rows the analysis tools run on: one per year for a period, otherwise every interval.
-        let analysisRows;
-        if (usablePeriod && canCompare) {
-            analysisRows = periodSeries(model, usablePeriod).filter((row) => row.complete);
-        } else {
-            analysisRows = model.points
-                .map((pt) => ({ year: 1970 + pt.t / (365.2425 * DAY_MS), label: timeLabel(model, pt.t), mean: transformed(model, pt) }))
-                .filter((row) => isNum(row.mean));
-        }
-        const analysisKey = JSON.stringify([state.topic, model.tools, analysisRows.map((row) => [row.year, row.mean])]);
-        const analysis = state.analysisCache.get(analysisKey) || null;
+        const wins = evaluateWindows(model);
+        // Period across years: every analysis time frame with a period; without one, the highlight period.
+        const periodWins = wins.filter((win) => win.period && win.allRows.length);
+        if (state.view === 'period' && !periodWins.length && !usablePeriod) state.view = 'timeline';
+        setControlStates(model, period);
 
         let spec;
-        if (state.view === 'overlay') spec = buildOverlay(model, usablePeriod);
-        else if (state.view === 'period' && usablePeriod) spec = buildPeriod(model, usablePeriod, analysis && !analysis.pending && !analysis.error ? analysis : null);
-        else spec = buildTimeline(model, usablePeriod);
+        if (state.view === 'overlay') spec = buildOverlay(model, usablePeriod, wins);
+        else if (state.view === 'period' && periodWins.length > 1) spec = buildPeriodMulti(model, periodWins);
+        else if (state.view === 'period' && periodWins.length === 1) spec = buildPeriod(model, periodWins[0].period, null, periodWins[0].color);
+        else if (state.view === 'period') spec = buildPeriod(model, usablePeriod, null);
+        else spec = buildTimeline(model, usablePeriod, wins);
         spec.ariaLabel = `${state.topic}: ${VIEWS.find((v) => v.id === state.view).label}`;
         state.lastTable = spec.table;
 
@@ -1162,7 +1446,7 @@
         renderChart(r.chart, spec);
         r.legend.innerHTML = legendHtml(spec.legend);
         renderTable(spec.table);
-        renderAnalysis(model, usablePeriod && canCompare ? usablePeriod : null, analysisRows, analysisKey, analysis);
+        renderAnalysis(model, wins);
     }
 
     function setControlStates(model, period) {
@@ -1230,12 +1514,13 @@
 
     // ------------------------------------------------------------ analysis
 
-    function requestAnalysis(key, rows, tools) {
+    function requestAnalysis(key, body) {
         state.analysisCache.set(key, { pending: true });
+        const tools = JSON.parse(key)[1];
         fetch('/api/analyze', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ x: rows.map((r) => r.year), values: rows.map((r) => r.mean), tools }),
+            body: JSON.stringify({ ...body, tools }),
         })
             .then(async (res) => {
                 const body = await res.json().catch(() => ({}));
@@ -1255,65 +1540,163 @@
         return `<div class="tp-stat tp-stat-muted"><div class="tp-stat-name">${esc(name)}</div><div class="tp-stat-value">${esc(text)}</div></div>`;
     }
 
-    function renderAnalysis(model, period, rows, key, analysis) {
+    function toolCard(name, res, rows, unit) {
+        if (!res.available) return mutedCard(TOOL_SHORT[name] || name, res.error || 'not available');
+        if (name === 'Linear Regression') {
+            return statCard('Linear regression',
+                `${esc(withUnit(fmtSigned(res.slope), unit))} / year`,
+                `${esc(withUnit(fmtSigned(res.slope * 10), unit))} per decade · R² ${fmt(res.r_squared, 2)} · p ${fmt(res.p_value, 3)}<br>95% CI of slope [${fmt(res.confidence_interval[0])}, ${fmt(res.confidence_interval[1])}]`,
+                res.significant);
+        }
+        if (name === 'Mann-Kendall') {
+            return statCard('Mann-Kendall', esc(res.trend.charAt(0).toUpperCase() + res.trend.slice(1)), `τ ${fmt(res.tau, 2)} · z ${fmt(res.z_statistic, 2)} · p ${fmt(res.p_value, 3)}`, res.significant);
+        }
+        if (name === 't-Test') {
+            const splitRow = rows.find((row) => row.year === res.split_x);
+            return statCard('t-Test (early vs. late)',
+                `${esc(withUnit(fmtSigned(res.late_mean - res.early_mean), unit))}`,
+                `early ${esc(withUnit(fmt(res.early_mean), unit))} → late ${esc(withUnit(fmt(res.late_mean), unit))}${splitRow ? ` (from ${esc(splitRow.label)})` : ''} · t ${fmt(res.t_statistic, 2)} · p ${fmt(res.p_value, 3)}`,
+                res.significant);
+        }
+        return statCard(name, 'done', '');
+    }
+
+    function pText(p) {
+        return isNum(p) ? `p ${fmt(p, 3)}` : '';
+    }
+
+    function sigMark(res) {
+        return res && res.available ? (res.significant ? ' <span class="tp-sig" title="significant (p < 0.05)">*</span>' : '') : '';
+    }
+
+    // Per-year results of a period time frame: one row per year, one column per tool.
+    function yearTable(win, unit) {
+        const cols = win.tools.map((t) => `<th>${esc(TOOL_SHORT[t] || t)}${t === 'Linear Regression' ? ' (per day)' : ''}</th>`).join('');
+        const body = win.years.map((yr) => {
+            const cells = win.tools.map((t) => {
+                if (!yr.complete) return '<td class="tp-muted">incomplete year</td>';
+                const res = yr.res && yr.res[t];
+                if (!res) return `<td class="tp-muted">${win.analysis && win.analysis.pending ? '…' : '–'}</td>`;
+                if (!res.available) return `<td class="tp-muted">${esc(res.error || 'n/a')}</td>`;
+                if (t === 'Linear Regression') {
+                    return `<td>${esc(withUnit(fmtSigned(res.slope), unit))}${sigMark(res)}<span class="tp-cell-sub">${esc(withUnit(fmtSigned(res.slope * win.lengthDays), unit))} over the period · R² ${fmt(res.r_squared, 2)} · ${pText(res.p_value)}</span></td>`;
+                }
+                if (t === 'Mann-Kendall') {
+                    return `<td>${esc(res.trend)}${sigMark(res)}<span class="tp-cell-sub">τ ${fmt(res.tau, 2)} · ${pText(res.p_value)}</span></td>`;
+                }
+                if (t === 't-Test') {
+                    return `<td>${esc(withUnit(fmtSigned(res.late_mean - res.early_mean), unit))}${sigMark(res)}<span class="tp-cell-sub">2nd half vs. 1st half · ${pText(res.p_value)}</span></td>`;
+                }
+                return '<td></td>';
+            }).join('');
+            return `<tr><td>${esc(yr.label)}</td><td>${yr.n}</td><td>${esc(withUnit(fmt(yr.mean), unit))}</td>${cells}</tr>`;
+        }).join('');
+        return `<div class="tp-table-wrap"><table class="tp-table tp-year-table"><thead><tr><th>Year</th><th>Values</th><th>Mean</th>${cols}</tr></thead><tbody>${body}</tbody></table></div>`;
+    }
+
+    // Summary cards of a period time frame: how the per-year results compare over the years.
+    function yearSummaryCards(win, unit) {
+        const cards = [];
+        const done = win.years.filter((yr) => yr.res);
+        const lrs = done.map((yr) => yr.res['Linear Regression']).filter((res) => res && res.available);
+        if (lrs.length) {
+            const up = lrs.filter((res) => res.slope > 0);
+            const sig = lrs.filter((res) => res.significant);
+            const m = mean(lrs.map((res) => res.slope));
+            cards.push(statCard(`Linear regression inside ${win.label}`,
+                `${esc(withUnit(fmtSigned(m), unit))} / day`,
+                `mean slope of ${lrs.length} years (≈ ${esc(withUnit(fmtSigned(m * win.lengthDays), unit))} over the period) · rising in ${up.length} of ${lrs.length} years, ${sig.length} significant`));
+        }
+        const mks = done.map((yr) => yr.res['Mann-Kendall']).filter((res) => res && res.available);
+        if (mks.length) {
+            const inc = mks.filter((res) => res.trend === 'increasing').length;
+            const dec = mks.filter((res) => res.trend === 'decreasing').length;
+            cards.push(statCard('Mann-Kendall', `${inc} ↑ · ${dec} ↓`, `significant trend inside the period in ${inc + dec} of ${mks.length} years (increasing / decreasing)`));
+        }
+        const tts = done.map((yr) => yr.res['t-Test']).filter((res) => res && res.available);
+        if (tts.length) {
+            const diffs = tts.map((res) => res.late_mean - res.early_mean);
+            cards.push(statCard('t-Test (2nd vs. 1st half)', `${esc(withUnit(fmtSigned(mean(diffs)), unit))}`, `mean difference over ${tts.length} years · significant in ${tts.filter((res) => res.significant).length}`));
+        }
+        return cards;
+    }
+
+    // Chart of the regression slope inside the period, one point per year with its 95% CI.
+    function slopeChartSpec(wins, unit) {
+        const withLr = wins.filter((win) => win.period && win.years.some((yr) => yr.res && yr.res['Linear Regression'] && yr.res['Linear Regression'].available));
+        if (!withLr.length) return null;
+        const series = [];
+        const legend = [];
+        const all = [];
+        withLr.forEach((win, i) => {
+            const shift = (i - (withLr.length - 1) / 2) * 0.12;
+            const pts = win.years
+                .map((yr) => ({ yr, res: yr.res && yr.res['Linear Regression'] }))
+                .filter((q) => q.res && q.res.available)
+                .map((q) => ({ x: q.yr.year + shift, y: q.res.slope, lo: q.res.confidence_interval[0], hi: q.res.confidence_interval[1], meta: { label: `${win.label} ${q.yr.label}`, res: q.res } }));
+            all.push(...pts.map((q) => q.x));
+            series.push({ id: `ci${win.w.id}`, kind: 'whisker', name: '95% CI', color: `${win.color}55`, width: 3, points: pts, hover: false });
+            series.push({ id: `sl${win.w.id}`, kind: 'line', name: `${win.label} slope`, color: win.color, width: 1.2, dash: '2,3', points: pts, markers: 4.5, gap: 1.5, hollow: (q) => !q.meta.res.significant });
+            legend.push({ name: `${win.label}: slope inside the period per year`, color: win.color, style: 'dot' });
+        });
+        legend.push({ name: 'Filled: significant (p < 0.05) · hollow: not significant · bar: 95% CI', color: COLOR.reference, style: 'hollow' });
+        const lo = Math.min(...all);
+        const hi = Math.max(...all);
+        const domain = [Math.floor(lo) - 0.6, Math.ceil(hi) + 0.6];
+        const perDay = unit ? `${unit}/day` : 'per day';
+        return {
+            kind: 'year', height: 210, xDomain: domain,
+            xTicks: (plotW, shown = domain) => {
+                const ys = [];
+                for (let y = Math.ceil(shown[0]); y <= Math.floor(shown[1]); y++) ys.push(y);
+                const every = Math.max(1, Math.ceil(ys.length / Math.max(2, Math.floor(plotW / 44))));
+                return ys.filter((_, k) => k % every === 0).map((y) => ({ v: y, label: String(y) }));
+            },
+            formatX: (x) => String(Math.round(x)),
+            series, bands: [], legend, unit: perDay, yInclude: [0],
+            tooltipExtra: (row) => (row.meta ? `${row.meta.label} · R² ${fmt(row.meta.res.r_squared, 2)} · p ${fmt(row.meta.res.p_value, 3)}` : ''),
+            ariaLabel: 'Regression slope inside the period, per year',
+        };
+    }
+
+    // One block per analysis time frame: what the tools ran on and their results.
+    function renderAnalysis(model, wins) {
         const r = state.refs;
         const unit = model.unit;
-        const tools = model.tools.length ? model.tools : null;
-        const toolNote = tools ? `Tools selected in the sidebar: ${tools.join(', ')}.` : 'No tools selected in the sidebar, so all tools are shown.';
-        let html;
-        if (period) {
-            const skipped = periodSeries(model, period).length - rows.length;
-            html = `<div class="tp-analysis-title">${esc(period.label)} across ${rows.length} year${rows.length === 1 ? '' : 's'}${state.fn.anomaly ? ' (anomalies)' : ''}</div>`;
-            html += `<div class="tp-analysis-note">One value per year: the mean of all intervals in ${esc(period.label)}${period.wraps ? ' (a period across New Year counts towards the year it ends in)' : ''}. ${skipped > 0 ? `${skipped} incomplete year${skipped === 1 ? ' is' : 's are'} left out. ` : ''}${esc(toolNote)}</div>`;
-        } else {
-            html = `<div class="tp-analysis-title">Whole series: ${rows.length} intervals${state.fn.anomaly ? ' (anomalies)' : ''}</div>`;
-            html += `<div class="tp-analysis-note">The tools run on every interval; slopes are per year. ${model.canCompare && model.years.length >= 2 ? 'Choose a <strong>highlight period</strong> (e.g. January or Summer) to compare that period across all years instead. ' : ''}${esc(toolNote)}</div>`;
+        const slopeSpec = slopeChartSpec(wins, unit);
+        let html = '';
+        if (slopeSpec) {
+            html += `<div class="tp-analysis-block"><div class="tp-analysis-title">Linear regression inside each period, year by year</div>
+                <div class="tp-analysis-note">Each point is the slope of the regression over the values inside one year's period (e.g. 1–31 January ${esc(String(model.years[0] || ''))}), not a regression between years.</div>
+                <div class="tp-chart tp-slope-chart" data-ref-slope></div><div class="tp-legend">${legendHtml(slopeSpec.legend)}</div></div>`;
         }
-
-        const cards = [];
-        if (rows.length) {
-            const vals = rows.map((row) => row.mean);
-            const m = mean(vals);
-            const sd = stdDev(vals);
-            const hiRow = rows.reduce((a, b) => (b.mean > a.mean ? b : a));
-            const loRow = rows.reduce((a, b) => (b.mean < a.mean ? b : a));
-            const last = rows[rows.length - 1];
-            cards.push(statCard('Mean of all years', esc(withUnit(fmt(m), unit)), `σ between years ${esc(withUnit(fmt(sd), unit))}`));
-            cards.push(statCard('Highest / lowest', `${esc(hiRow.label)}: ${esc(withUnit(fmt(hiRow.mean), unit))}`, `Lowest ${esc(loRow.label)}: ${esc(withUnit(fmt(loRow.mean), unit))}`));
-            cards.push(statCard(`Latest (${last.label}) vs. ${period ? 'mean' : 'series mean'}`, esc(withUnit(fmtSigned(last.mean - m), unit)), isNum(sd) && sd > 0 ? `${fmtSigned((last.mean - m) / sd, 2)} σ` : ''));
-        }
-
-        if (rows.length >= 2) {
-            if (!analysis) {
-                requestAnalysis(key, rows, tools);
-                cards.push(mutedCard('Analysis tools', 'Running…'));
-            } else if (analysis.pending) {
-                cards.push(mutedCard('Analysis tools', 'Running…'));
-            } else if (analysis.error) {
-                cards.push(mutedCard('Analysis tools', `Not available: ${analysis.error}`));
+        html += wins.map((win) => {
+            const head = `<div class="tp-analysis-title"><span class="tp-window-dot" style="background:${win.color}"></span>${esc(win.label)}${win.period ? ` in ${win.years.length} year${win.years.length === 1 ? '' : 's'}` : `: ${win.rows.length} intervals`}${state.fn.anomaly ? ' (anomalies)' : ''}</div>`;
+            let note;
+            if (win.period) {
+                const skipped = win.years.filter((yr) => !yr.complete).length;
+                note = `The tools run inside every year's ${esc(win.label)} on its own (x = day within the period), so each year gets its own result.${win.period.wraps ? ' A period across New Year counts towards the year it ends in.' : ''}${skipped > 0 ? ` ${skipped} incomplete year${skipped === 1 ? ' is' : 's are'} not analysed.` : ''}`;
             } else {
-                for (const [name, res] of Object.entries(analysis.tools || {})) {
-                    if (!res.available) { cards.push(mutedCard(name, res.error || 'not available')); continue; }
-                    if (name === 'Linear Regression') {
-                        cards.push(statCard('Linear regression',
-                            `${esc(withUnit(fmtSigned(res.slope), unit))} / year`,
-                            `${esc(withUnit(fmtSigned(res.slope * 10), unit))} per decade · R² ${fmt(res.r_squared, 2)} · p ${fmt(res.p_value, 3)}<br>95% CI of slope [${fmt(res.confidence_interval[0])}, ${fmt(res.confidence_interval[1])}]`,
-                            res.significant));
-                    } else if (name === 'Mann-Kendall') {
-                        cards.push(statCard('Mann-Kendall', esc(res.trend.charAt(0).toUpperCase() + res.trend.slice(1)), `τ ${fmt(res.tau, 2)} · z ${fmt(res.z_statistic, 2)} · p ${fmt(res.p_value, 3)}`, res.significant));
-                    } else if (name === 't-Test') {
-                        const splitRow = rows.find((row) => row.year === res.split_x);
-                        cards.push(statCard('t-Test (early vs. late years)',
-                            `${esc(withUnit(fmtSigned(res.late_mean - res.early_mean), unit))}`,
-                            `early ${esc(withUnit(fmt(res.early_mean), unit))} → late ${esc(withUnit(fmt(res.late_mean), unit))}${splitRow ? ` (from ${esc(splitRow.label)})` : ''} · t ${fmt(res.t_statistic, 2)} · p ${fmt(res.p_value, 3)}`,
-                            res.significant));
-                    }
-                }
+                note = 'The tools run on every interval of the whole series; slopes are per year.';
             }
-        } else {
-            cards.push(mutedCard('Analysis tools', period ? 'Needs at least two complete years.' : 'Needs at least two values.'));
-        }
-        r.analysis.innerHTML = html + `<div class="tp-stats">${cards.join('')}</div>`;
+            const cards = [];
+            if (win.rows.length) {
+                const vals = win.rows.map((row) => row.mean);
+                cards.push(statCard(win.period ? `Mean of ${win.label}` : 'Mean', esc(withUnit(fmt(mean(vals)), unit)), `σ ${win.period ? 'between years ' : ''}${esc(withUnit(fmt(stdDev(vals)), unit))}`));
+            }
+            let extra = '';
+            if (win.status) cards.push(mutedCard('Analysis tools', win.status));
+            else if (!win.analysis || win.analysis.pending) cards.push(mutedCard('Analysis tools', 'Running…'));
+            else if (win.analysis.error) cards.push(mutedCard('Analysis tools', `Not available: ${win.analysis.error}`));
+            else if (win.period) {
+                cards.push(...yearSummaryCards(win, unit));
+                extra = yearTable(win, unit);
+            } else for (const name of win.tools) if (win.results[name]) cards.push(toolCard(name, win.results[name], win.rows, unit));
+            return `<div class="tp-analysis-block" style="--tp-win:${win.color}">${head}<div class="tp-analysis-note">${note}</div><div class="tp-stats">${cards.join('')}</div>${extra}</div>`;
+        }).join('');
+        r.analysis.innerHTML = html || '<div class="tp-analysis-note">Add a time frame under “Analyses” to run the tools.</div>';
+        const slopeHost = r.analysis.querySelector('[data-ref-slope]');
+        if (slopeHost && slopeSpec) renderChart(slopeHost, slopeSpec);
     }
 
     window.TrendPlots = { mount, setData, setLoading };

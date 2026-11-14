@@ -430,3 +430,130 @@ button.tp-legend-item:hover {
     font-size: 0.74rem;
     color: var(--tp-muted);
 }
+
+/* Analysis time frames: one row per time frame with its own tools and colour */
+.tp-windows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 10px 0 12px;
+}
+.tp-windows-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px;
+}
+.tp-windows-note {
+    font-size: 0.74rem;
+    color: var(--tp-muted);
+}
+.tp-window {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--tp-border);
+    border-left: 4px solid var(--tp-win, var(--tp-accent));
+    background: #fff;
+}
+.tp-window-swatch {
+    display: none;
+}
+.tp-window select,
+.tp-window input.tp-md {
+    font: inherit;
+    font-size: 0.82rem;
+    padding: 4px 6px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #fff;
+    color: var(--tp-ink);
+}
+.tp-window input.tp-md {
+    width: 4.6rem;
+    text-align: center;
+}
+.tp-window input.tp-md[aria-invalid="true"] {
+    border-color: #d1394a;
+}
+.tp-window-tools {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.tp-tool {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.8rem;
+    padding: 3px 9px 3px 6px;
+    border-radius: 999px;
+    border: 1px solid #cbd5e1;
+    color: var(--tp-ink-2);
+    cursor: pointer;
+    user-select: none;
+}
+.tp-tool input {
+    margin: 0;
+    accent-color: var(--tp-win, var(--tp-accent));
+}
+.tp-tool:has(input:checked) {
+    border-color: var(--tp-win, var(--tp-accent));
+    color: var(--tp-ink);
+}
+.tp-window-remove {
+    margin-left: auto;
+    font: inherit;
+    font-size: 1rem;
+    line-height: 1;
+    width: 26px;
+    height: 26px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--tp-muted);
+    cursor: pointer;
+}
+.tp-window-remove:hover {
+    background: #f1f5f9;
+    color: var(--tp-ink);
+}
+.tp-window-add {
+    align-self: flex-start;
+}
+.tp-window-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: baseline;
+}
+.tp-analysis-block + .tp-analysis-block {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--tp-border);
+}
+
+/* Per-year results of an analysis time frame */
+.tp-year-table td {
+    vertical-align: top;
+}
+.tp-cell-sub {
+    display: block;
+    font-size: 0.72rem;
+    color: var(--tp-muted);
+}
+.tp-year-table .tp-muted {
+    color: var(--tp-muted);
+}
+.tp-sig {
+    color: #0f7b4f;
+    font-weight: 700;
+}
+.tp-slope-chart {
+    margin-top: 6px;
+}
