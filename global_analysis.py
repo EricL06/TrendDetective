@@ -821,7 +821,16 @@ def distribution(ds: GriddedDataset, region: Region, season: str = "JJA",
     w = w[ok]
     last = int(years[-1])
     if periods is None:
-        periods = [(base[0], base[1]), (1981, 2000), (2001, 2012), (2013, last)]
+        # The reference period, then the years after it in (up to) three equal parts.
+        after = last - base[1]
+        parts = 3 if after >= 30 else 2 if after >= 12 else 1
+        size = after / parts if after > 0 else 0
+        periods = [(base[0], base[1])]
+        for k in range(parts):
+            a = base[1] + 1 + round(k * size)
+            b = base[1] + round((k + 1) * size)
+            if b >= a:
+                periods.append((a, b))
     out_periods = []
     for a, b in periods:
         sel = (years >= a) & (years <= b)

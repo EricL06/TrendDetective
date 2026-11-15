@@ -95,9 +95,13 @@ function debounce(fn, ms) {
   return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
 }
 
+const SEASON_LAST_MONTH = { annual: 12, DJF: 2, MAM: 5, JJA: 8, SON: 11 };
+
+/** Last year whose chosen season is complete in the dataset. */
 function lastFullYear() {
   const [y, m] = state.meta.dataset.last;
-  return m === 12 ? y : y - 1;
+  const need = SEASON_LAST_MONTH[state.season] ?? Number(String(state.season).slice(1)) ?? 12;
+  return need <= m ? y : y - 1;
 }
 
 function commonParams() {
@@ -138,10 +142,11 @@ function readHash() {
   if (LAYER_UI.some((l) => l.id === p.get("k"))) state.kind = p.get("k");
   const per = (p.get("p") || "").split("-").map(Number);
   if (per.length === 2 && per.every(Number.isFinite)) [state.start, state.end] = per;
-  if (p.get("s")) state.season = p.get("s");
-  if (p.get("b")) state.baseline = p.get("b");
-  if (p.get("y")) state.year = Number(p.get("y"));
-  if (p.get("t")) state.tab = p.get("t");
+  // Only accept values the dataset offers, so a broken link falls back to defaults.
+  if (state.meta.seasons.some((x) => x.id === p.get("s"))) state.season = p.get("s");
+  if (state.meta.baselines.some((x) => x.id === p.get("b"))) state.baseline = p.get("b");
+  if (Number.isFinite(Number(p.get("y"))) && p.get("y")) state.year = Number(p.get("y"));
+  if ([...document.querySelectorAll("#tabs [data-tab]")].some((b) => b.dataset.tab === p.get("t"))) state.tab = p.get("t");
   const r = p.get("r");
   if (r == null) {
     for (const spec of DEFAULT_REGIONS) addRegion(spec, { silent: true });
@@ -210,7 +215,13 @@ function buildControls() {
 
   $("start-year").addEventListener("change", (e) => setPeriod(Number(e.target.value), state.end));
   $("end-year").addEventListener("change", (e) => setPeriod(state.start, Number(e.target.value)));
-  season.addEventListener("change", (e) => { state.season = e.target.value; state.frames = null; refreshAll(); });
+  season.addEventListener("change", (e) => {
+    state.season = e.target.value;
+    state.frames = null;
+    state.end = Math.min(state.end, lastFullYear());
+    syncControls();
+    refreshAll();
+  });
   baseline.addEventListener("change", (e) => { state.baseline = e.target.value; state.frames = null; refreshAll(); });
   $("opt-sig").addEventListener("change", (e) => { state.sig = e.target.checked; redrawOverlay(); });
   $("opt-smooth").addEventListener("change", (e) => { state.smooth = e.target.checked; redrawOverlay(); });
@@ -288,7 +299,7 @@ function setKind(kind) {
 
 function setPeriod(start, end) {
   const first = state.meta.dataset.first[0];
-  const last = state.meta.dataset.last[0];
+  const last = lastFullYear();
   start = Math.max(first, Math.min(last, Math.round(start || first)));
   end = Math.max(first, Math.min(last, Math.round(end || last)));
   if (end - start < 9) {
@@ -472,18 +483,29 @@ function currentScale() {
     const m = state.scaleMax || niceCeil(absPercentile(state.grid, 0.97) || 1);
     return { kind: "sequential", min: 0, max: m };
   }
-  const auto = niceCeil(absPercentile(state.grid, 0.96) || 1);
+  const auto = niceCeil(absPercentile(state.grid, 0.95) || 1);
   const m = state.scaleMax || auto;
   return { kind: "diverging", min: -m, max: m };
 }
 
 function absPercentile(grid, q) {
+  // Area-weighted quantile of |value| (polar rows hold many tiny cells).
   if (!grid) return null;
-  const vals = [];
-  for (const v of grid) if (v === v) vals.push(Math.abs(v));
-  if (!vals.length) return null;
-  vals.sort((a, b) => a - b);
-  return vals[Math.min(vals.length - 1, Math.floor(q * vals.length))];
+  const g = geom();
+  const items = [];
+  let total = 0;
+  for (let r = 0; r < g.nlat; r++) {
+    const w = Math.cos(((g.lat0 + r * g.dlat) * Math.PI) / 180);
+    for (let c = 0; c < g.nlon; c++) {
+      const v = grid[r * g.nlon + c];
+      if (v === v) { items.push([Math.abs(v), w]); total += w; }
+    }
+  }
+  if (!items.length) return null;
+  items.sort((a, b) => a[0] - b[0]);
+  let acc = 0;
+  for (const [v, w] of items) { acc += w; if (acc >= q * total) return v; }
+  return items[items.length - 1][0];
 }
 
 function geom() {
@@ -558,6 +580,7 @@ function cellIndex(lng, lat) {
 }
 
 function fmtLatLon(lat, lon) {
+  lon = ((((lon + 180) % 360) + 360) % 360) - 180;
   return `${Math.abs(lat).toFixed(0)}°${lat >= 0 ? "N" : "S"} ${Math.abs(lon).toFixed(0)}°${lon >= 0 ? "O" : "W"}`;
 }
 
@@ -627,7 +650,9 @@ function setDrawMode(on) {
 }
 
 function boxFeature(a, b) {
-  const w = Math.min(a.lng, b.lng), e = Math.max(a.lng, b.lng);
+  // Globe longitudes wrap at ±180°: unwrap the end point relative to the start.
+  const bl = b.lng + 360 * Math.round((a.lng - b.lng) / 360);
+  const w = Math.min(a.lng, bl), e = Math.max(a.lng, bl);
   const s = Math.min(a.lat, b.lat), n = Math.max(a.lat, b.lat);
   const ring = [];
   const steps = 24;
@@ -666,7 +691,7 @@ function setupDrawing() {
 let layerReq = 0;
 async function refreshLayer() {
   const req = ++layerReq;
-  if (state.kind === "year") return showYearMode();
+  if (state.kind === "year") return showYearMode(req);
   loading(true, "Berechne Karte …");
   try {
     const L = await getJSON("layer", { kind: state.kind, ...periodParams() });
@@ -687,9 +712,17 @@ async function refreshLayer() {
   }
 }
 
+const framesPending = new Map();
 async function loadFrames() {
   const key = `${state.season}|${state.baseline}`;
   if (state.frames?.key === key) return state.frames;
+  if (framesPending.has(key)) return framesPending.get(key);
+  const promise = fetchFrames(key);
+  framesPending.set(key, promise);
+  try { return await promise; } finally { framesPending.delete(key); }
+}
+
+async function fetchFrames(key) {
   loading(true, "Lade alle Jahreskarten …");
   try {
     const qs = new URLSearchParams(commonParams()).toString();
@@ -699,16 +732,18 @@ async function loadFrames() {
     const buf = await res.arrayBuffer();
     const years = [];
     for (let y = y0; y <= y1; y++) years.push(y);
-    state.frames = { key, years, data: new Int16Array(buf) };
-    return state.frames;
+    const frames = { key, years, data: new Int16Array(buf) };
+    if (key === `${state.season}|${state.baseline}`) state.frames = frames;
+    return frames;
   } finally {
     loading(false);
   }
 }
 
-async function showYearMode() {
+async function showYearMode(req) {
   try {
     const f = await loadFrames();
+    if (req !== layerReq || state.kind !== "year" || f.key !== `${state.season}|${state.baseline}`) return;
     const slider = $("year-slider");
     slider.min = f.years[0];
     slider.max = f.years[f.years.length - 1];
@@ -932,6 +967,10 @@ function buildSearch() {
     list.hidden = !items.length;
   };
   const choose = (it) => {
+    if (!it.spec) {
+      toast(`„${it.name.split(",")[0]}“ reicht über die Datumsgrenze; der Suchdienst liefert dafür nur einen weltumspannenden Rahmen. Bitte die Region mit ▭ selbst aufziehen.`, "info");
+      return;
+    }
     addRegion(it.spec);
     input.value = "";
     items = [];
@@ -953,6 +992,10 @@ function buildSearch() {
       if (input.value.trim() !== q) return;
       const remote = (body.places || []).map((p) => {
         const [w, s, e, n] = p.bbox;
+        if (e - w > 180) {
+          // Nominatim gives -180…180 for places that cross the date line (USA, Russia, Fiji …).
+          return { name: p.label || p.name, kind: "über die Datumsgrenze – bitte als Rechteck zeichnen", spec: null };
+        }
         const tiny = e - w < 0.05 && n - s < 0.05;
         const spec = tiny ? { point: [p.lon, p.lat], name: p.name } : { bbox: [w, s, e, n], name: p.name };
         return { name: p.label || p.name, kind: tiny ? "Punkt → 2°-Zelle" : p.kind || "Gebiet", spec };
@@ -1038,10 +1081,14 @@ function seriesForCharts() {
   });
 }
 
-let rankingCache = null;
-let zonalCache = null;
+const rankingCache = new Map();
+const zonalCache = new Map();
+const distCache = new Map();
+let renderToken = 0;
 
 async function renderAnalysis() {
+  const token = ++renderToken;
+  const stale = () => token !== renderToken;
   const body = $("analysis-body");
   if (document.querySelector(".layout").classList.contains("analysis-collapsed")) return;
   const d = state.regionData;
@@ -1058,7 +1105,7 @@ async function renderAnalysis() {
     } else if (state.tab === "tempo") {
       charts.rollingTrend(body, { years: d.years, series, window: d.rolling_window, global: null });
     } else if (state.tab === "dist") {
-      await renderDistribution(body, series);
+      await renderDistribution(body, series, stale);
     } else if (state.tab === "stripes") {
       charts.stripes(body, { years: d.years, series });
       const note = document.createElement("p");
@@ -1072,29 +1119,29 @@ async function renderAnalysis() {
       renderStats(body, series, d);
     } else if (state.tab === "ranking") {
       const key = JSON.stringify(periodParams());
-      if (rankingCache?.key !== key) {
+      if (!rankingCache.has(key)) {
         body.innerHTML = `<div class="empty">Berechne Ranking aller Regionen …</div>`;
-        const data = await getJSON("ranking", periodParams());
-        rankingCache = { key, data };
+        rankingCache.set(key, await getJSON("ranking", periodParams()));
+        if (stale()) return;
       }
-      if (state.tab !== "ranking") return;
+      const ranking = rankingCache.get(key);
       const colors = {};
       for (const r of state.regions) if (r.spec.preset) colors[r.spec.preset] = r.color;
       charts.ranking(body, {
-        rows: rankingCache.data.rows,
-        global: rankingCache.data.global.trend,
+        rows: ranking.rows,
+        global: ranking.global.trend,
         selectedIds: state.regions.filter((r) => r.spec.preset).map((r) => r.spec.preset),
         colors,
         onPick: (id) => { togglePreset(id); setTimeout(renderAnalysis, 0); },
       });
     } else if (state.tab === "zonal") {
       const key = JSON.stringify(commonParams());
-      if (zonalCache?.key !== key) {
+      if (!zonalCache.has(key)) {
         body.innerHTML = `<div class="empty">Berechne Zonalmittel …</div>`;
-        zonalCache = { key, data: await getJSON("zonal", commonParams()) };
+        zonalCache.set(key, await getJSON("zonal", commonParams()));
+        if (stale()) return;
       }
-      if (state.tab !== "zonal") return;
-      const z = zonalCache.data;
+      const z = zonalCache.get(key);
       const highlight = state.regions.map((r) => {
         const ring = outlineFor(r);
         if (!ring) return null;
@@ -1114,23 +1161,22 @@ async function renderAnalysis() {
       charts.hovmoller(left, { years: z.years, lats: z.lats, values: z.values, period: [state.start, state.end], highlight });
     }
   } catch (err) {
-    body.innerHTML = `<div class="empty">${charts.escapeHtml(err.message)}</div>`;
+    if (!stale()) body.innerHTML = `<div class="empty">${charts.escapeHtml(err.message)}</div>`;
   }
 }
 
-let distCache = null;
-async function renderDistribution(body, series) {
+async function renderDistribution(body, series, stale) {
   if (!series.some((s) => s.uid === state.distUid)) state.distUid = series[0].uid;
   const r = state.regions.find((x) => x.uid === state.distUid);
   const spec = { ...r.spec, name: r.name };
   const params = { region: JSON.stringify(spec), season: state.season, baseline: state.baseline };
   const key = JSON.stringify(params);
-  if (distCache?.key !== key) {
+  if (!distCache.has(key)) {
     body.innerHTML = `<div class="empty">Berechne Verteilung …</div>`;
-    distCache = { key, data: await getJSON("distribution", params) };
+    distCache.set(key, await getJSON("distribution", params));
+    if (stale()) return;
   }
-  if (state.tab !== "dist") return;
-  const d = distCache.data;
+  const d = distCache.get(key);
   body.innerHTML = "";
   const split = document.createElement("div");
   split.className = "split";
@@ -1282,6 +1328,8 @@ function buildAbout() {
       <li><b>Robuste Prüfung</b>: Theil-Sen-Steigung und Mann-Kendall-Test.</li>
       <li><b>Beschleunigung</b>: Trend der zweiten minus Trend der ersten Hälfte des Zeitraums – die „zweite Ableitung“ der Temperatur.</li>
       <li><b>Signal/Rauschen &amp; Zeitpunkt des Hervortretens</b>: wie deutlich sich die Erwärmung von der natürlichen Jahr-zu-Jahr-Schwankung abhebt (Hawkins &amp; Sutton 2012).</li>
+      <li><b>Erwärmungstempo</b>: Trend der jeweils letzten 30 Jahre, für jedes Endjahr neu berechnet – zeigt, ob und wann sich die Erwärmung beschleunigt hat.</li>
+      <li><b>Extreme</b>: Jede Zelle und jedes Jahr wird mit Mittel und Schwankung (σ) der Referenzperiode standardisiert; die Kurven zeigen, wie sich die Verteilung verschiebt und wie oft früher seltene (&gt; 2σ) oder extreme (&gt; 3σ) Werte heute auftreten (Hansen, Sato &amp; Ruedy 2012).</li>
       <li><b>Räumlicher Gradient</b>: Betrag des räumlichen Gradienten des Trendfelds (zentrale Differenzen) in °C/Dekade pro 1000 km.</li>
       <li><b>Regionen</b>: flächengewichtetes Mittel (cos Breite × Anteil der Zelle in der Region). Jahre mit weniger als ⅓ Datenabdeckung der Region werden nicht gezeigt.</li>
       <li><b>Referenzperiode</b> verschiebt nur das Nullniveau der Anomalien, Trends bleiben gleich.</li>
@@ -1293,7 +1341,6 @@ function buildAbout() {
 // ---------------------------------------------------------------------------
 
 function refreshAll() {
-  rankingCache = null;
   writeHash();
   refreshLayer();
   refreshRegions();
