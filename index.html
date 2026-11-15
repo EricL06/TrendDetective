@@ -718,6 +718,8 @@
             .status-card { padding: 0.8rem 0.9rem; }
             .viz-grid { grid-template-columns: minmax(0, 1fr); }
         }
+    .explorer-link { margin-left: auto; font-size: 12px; color: #2563eb; text-decoration: none; border: 1px solid #c7d7f5; border-radius: 999px; padding: 4px 10px; white-space: nowrap; }
+    .explorer-link:hover { background: #eef4ff; }
     </style>
 </head>
 <body>
@@ -735,6 +737,7 @@
         <div class="top-bar">
             <button id="apply" class="py-button" type="button" disabled>Analyze</button>
             <span id="apply-status" class="apply-status" aria-live="polite"></span>
+            <a href="/explorer/" class="explorer-link" title="Globale Temperaturtrends auf dem Globus vergleichen">🌍 Global Explorer</a>
         </div>
 
         <!-- Timeintervall brackets [DD.MM.YYYY] - [DD.MM.YYYY] above the search bar -->

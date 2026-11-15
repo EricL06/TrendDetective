@@ -12,6 +12,7 @@ Orientation for AI agents and new contributors. Keep it short and true.
 | `area_analysis.py`, `plot_analysis.py`, `correlation.py`, `evolution.py`, `events.py` | Analysis behind the website. |
 | `src/task.py` | Analysis tools (regression, Mann-Kendall, ...). |
 | `index.html`, `static/` | Website frontend. |
+| `explorer/`, `global_*.py` | Global Explorer: gridded-data globe at `/explorer/`, API under `/api/global/`. |
 | `map-widget/` | Map widget source (React + MapLibre). |
 | `tests/`, `src/test_task.py` | Python unit tests (unittest). |
 | `docs/` | Sphinx API reference. |

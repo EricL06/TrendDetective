@@ -25,6 +25,7 @@ import area_analysis
 import correlation
 import evolution
 import examples
+import global_api
 import station_coverage
 import interface
 import places
@@ -92,11 +93,11 @@ PUBLIC_FILES: frozenset[str] = frozenset({"/", "/index.html", "/favicon.ico"})
 
 
 def _is_public_path(path: str) -> bool:
-    """Whether a GET path may be served from disk (the page and ``static/`` only)."""
+    """Whether a GET path may be served from disk (the page, ``static/`` and ``explorer/``)."""
     clean = unquote(path)
     if ".." in clean.split("/"):
         return False
-    return clean in PUBLIC_FILES or clean.startswith("/static/")
+    return clean in PUBLIC_FILES or clean.startswith(("/static/", "/explorer/"))
 
 
 @dataclass(frozen=True)
@@ -201,6 +202,13 @@ class WebAppHandler(SimpleHTTPRequestHandler):
             return
 
         url = urlsplit(self.path)
+        if global_api.handle_get(self, url.path, url.query):
+            return
+        if url.path in ("/explorer", "/globe"):
+            self.send_response(301)
+            self.send_header("Location", "/explorer/")
+            self.end_headers()
+            return
         if url.path == "/api/places":
             query = parse_qs(url.query).get("q", [""])[0]
             try:
