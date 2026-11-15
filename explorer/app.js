@@ -751,7 +751,20 @@ function setupDrawing() {
     const name = `Rechteck ${fmtLatLon(bbox[3], bbox[0])} – ${fmtLatLon(bbox[1], bbox[2])}`;
     addRegion({ bbox: bbox.map((v) => Math.round(v * 100) / 100), name });
   });
-  window.addEventListener("keydown", (e) => { if (e.key === "Escape" && drawMode) { drawStart = null; setDrawMode(false); } });
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && drawMode) { drawStart = null; setDrawMode(false); }
+    // ← / → step through the years, space plays/pauses (not while typing in a field).
+    if (state.kind !== "year" || !state.frames || /INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName || "")) return;
+    const [y0, y1] = [state.frames.years[0], state.frames.years[state.frames.years.length - 1]];
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      state.year = Math.max(y0, Math.min(y1, state.year + (e.key === "ArrowRight" ? 1 : -1)));
+      showYear();
+      e.preventDefault();
+    } else if (e.key === " ") {
+      togglePlay();
+      e.preventDefault();
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -856,6 +869,7 @@ function togglePlay() {
   if (state.playing) {
     const f = state.frames;
     if (!f) { state.playing = false; return; }
+    overlayCanvas.width = overlayCanvas.height = 1024; // lighter frames while animating
     if (state.year >= f.years[f.years.length - 1]) state.year = f.years[0];
     playTimer = setInterval(() => {
       const last = f.years[f.years.length - 1];
@@ -865,6 +879,8 @@ function togglePlay() {
     }, 160);
   } else {
     clearInterval(playTimer);
+    overlayCanvas.width = overlayCanvas.height = 1536;
+    redrawOverlay();
     writeHash();
   }
 }
