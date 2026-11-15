@@ -86,7 +86,8 @@ export function timeSeries(container, { years, series, period, unit = "°C", bas
   host.style.position = "relative";
   wrap.appendChild(host);
 
-  const m = { l: 44, r: series.length <= 4 ? 118 : 16, t: 8, b: 26 };
+  const direct = series.length <= 4 && host.clientWidth >= 560;
+  const m = { l: 44, r: direct ? 118 : 12, t: 8, b: 26 };
   const { div, svg, W, H, iw, ih } = frame(host, m);
   let lo = Infinity, hi = -Infinity;
   for (const s of series) for (const v of s.values) if (v != null) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
@@ -136,7 +137,7 @@ export function timeSeries(container, { years, series, period, unit = "°C", bas
     let lastIdx = -1;
     s.running.forEach((v, i) => { if (v != null) lastIdx = i; });
     if (lastIdx < 0) s.values.forEach((v, i) => { if (v != null) lastIdx = i; });
-    if (lastIdx >= 0 && series.length <= 4) {
+    if (lastIdx >= 0 && direct) {
       const v = s.running[lastIdx] ?? s.values[lastIdx];
       labels.push({ y: Y(v), x: X(years[lastIdx]), name: s.name, color: s.color, trend: st.trend });
     }
@@ -458,7 +459,8 @@ export function rollingTrend(container, { years, series, window, global }) {
   const host = document.createElement("div");
   host.style.cssText = "flex:1;min-height:0;position:relative";
   wrap.appendChild(host);
-  const m = { l: 48, r: series.length <= 4 ? 118 : 16, t: 8, b: 26 };
+  const direct = series.length <= 4 && host.clientWidth >= 560;
+  const m = { l: 48, r: direct ? 118 : 12, t: 8, b: 26 };
   const { svg, W, H, iw, ih } = frame(host, m);
   let lo = 0, hi = 0, first = Infinity;
   const band = series.length <= 2;
@@ -504,7 +506,7 @@ export function rollingTrend(container, { years, series, window, global }) {
     el("path", { d: pathOf(s.rolling), fill: "none", stroke: s.color, "stroke-width": 2.25, "stroke-linejoin": "round" }, svg);
     let li = -1;
     s.rolling.forEach((v, i) => { if (v != null) li = i; });
-    if (li >= 0 && series.length <= 4) labels.push({ y: Y(s.rolling[li]), name: s.name, v: s.rolling[li], color: s.color });
+    if (li >= 0 && direct) labels.push({ y: Y(s.rolling[li]), name: s.name, v: s.rolling[li], color: s.color });
   }
   if (global != null) {
     el("line", { x1: m.l, x2: W - m.r, y1: Y(global), y2: Y(global), stroke: "#a9b6c7", "stroke-dasharray": "2 4", "stroke-opacity": 0.5 }, svg);

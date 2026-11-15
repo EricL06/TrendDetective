@@ -250,6 +250,10 @@ function buildControls() {
     catch { toast("Kopieren nicht möglich – bitte die Adresszeile kopieren.", "info"); }
   });
   setupResize();
+  if (window.matchMedia("(max-width: 760px)").matches) {
+    $("controls").classList.add("collapsed");
+    $("btn-collapse-controls").textContent = "+";
+  }
   buildPresets();
   buildSearch();
   buildAbout();

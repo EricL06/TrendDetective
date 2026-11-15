@@ -66,6 +66,7 @@ a { color: var(--accent); }
   padding: 5px 12px; color: var(--text-2); text-decoration: none; font-size: 12px;
 }
 .ghost:hover { border-color: var(--accent); color: var(--text); }
+.ghost { white-space: nowrap; }
 
 /* ---------- layout ---------- */
 .layout {
@@ -330,21 +331,30 @@ dialog p, dialog li { color: var(--text-2); font-size: 13px; }
   .timeline { left: 12px; right: 12px; bottom: 150px; }
 }
 @media (max-width: 760px) {
-  body { overflow: auto; }
+  body { overflow-x: hidden; overflow-y: auto; }
+  .topbar { padding: 0 12px; }
+  .dataset { max-width: 52vw; }
+  .topnav .ghost { padding: 4px 9px; font-size: 11px; }
+  #btn-about { display: none; }
+  .brand h1 span { display: none; }
   .layout {
     height: auto;
-    grid-template-columns: 1fr;
-    grid-template-rows: 62vh auto auto;
-    grid-template-areas: "map" "side" "analysis";
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 64vh auto auto;
+    grid-template-areas: "map" "analysis" "side";
   }
-  .analysis { min-height: 70vh; }
-  .sidebar { border-left: none; }
-  .controls { width: calc(100% - 24px); max-height: 50%; }
-  .controls:not(.collapsed) ~ .legend { display: none; }
-  .legend { width: auto; right: 12px; }
+  .analysis { min-height: 72vh; }
+  .resize-handle { display: none; }
+  .sidebar { border-left: none; border-top: 1px solid var(--line-soft); overflow: visible; }
+  .controls { left: 8px; top: 8px; width: calc(100% - 64px); max-height: calc(100% - 16px); }
+  .legend { left: 8px; right: 8px; bottom: 26px; width: auto; padding: 7px 10px; }
   #legend-bar { width: 100%; }
-  .map-tools { top: auto; bottom: 120px; right: 12px; }
+  .legend-stats { display: none; }
+  .timeline { left: 8px; right: 8px; bottom: 112px; }
+  .map-tools { top: auto; bottom: 112px; right: 8px; }
+  .timeline:not([hidden]) ~ .map-tools { bottom: 162px; }
   .split { grid-template-columns: 1fr; }
-  .topnav .ghost:first-child { display: none; }
-  .dataset { max-width: 55vw; }
+  .analysis-meta { display: none; }
+  .analysis-head { gap: 4px; }
+  .layout.analysis-collapsed { grid-template-rows: 64vh 42px auto; }
 }
