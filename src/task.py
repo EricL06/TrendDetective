@@ -74,8 +74,17 @@ def _mann_kendall_s(ordered: np.ndarray) -> int:
     million pairs) take milliseconds instead of the seconds a Python double
     loop needs.
     """
+    n = ordered.size
+    if n > 3000:
+        # O(n log n): with distinct times, Kendall's tau-b is S / sqrt(n0 (n0 - t)),
+        # n0 = n(n-1)/2 and t the pairs tied in the values.
+        tau = stats.kendalltau(np.arange(n), ordered).statistic
+        counts = np.unique(ordered, return_counts=True)[1]
+        n0 = n * (n - 1) / 2
+        tied = float(np.sum(counts * (counts - 1) / 2))
+        return int(round(float(tau) * math.sqrt(n0 * (n0 - tied)))) if math.isfinite(tau) else 0
     total = 0
-    for i in range(ordered.size - 1):
+    for i in range(n - 1):
         total += int(np.sign(ordered[i + 1 :] - ordered[i]).sum())
     return total
 
@@ -858,6 +867,28 @@ def interval_step_days(interval_length: tuple[float, str]) -> float:
     return step_days
 
 
+DIRECTION_CODES: frozenset[str] = frozenset(
+    {"awdr", "wdf1", "wdf2", "wdf5", "wdfg", "wdfi", "wdfm", "wind_dir", "rel_wind_dir"}
+)
+"""Codes holding a compass direction in degrees."""
+
+
+def is_direction(code: str) -> bool:
+    """Whether ``code`` is a compass direction (averaged on the circle, no trend)."""
+    code = code.lower()
+    return code in DIRECTION_CODES or code.endswith("_direction") or code.endswith("_dir")
+
+
+def _circular_mean(degrees: list[float]) -> float:
+    """Mean direction: 350° and 10° give 0°, not 180°."""
+    x = sum(math.cos(math.radians(d)) for d in degrees)
+    y = sum(math.sin(math.radians(d)) for d in degrees)
+    if abs(x) < 1e-12 and abs(y) < 1e-12:
+        return float("nan")
+    value = math.degrees(math.atan2(y, x)) % 360
+    return 0.0 if value >= 359.9995 else value
+
+
 MIN_BIN_COVERAGE: float = 0.75
 """Share of an interval's days that must have data for its mean to be used.
 
@@ -930,6 +961,7 @@ def bin_records_indexed(
       otherwise a gap of a year would be squeezed to one interval.
     """
     interval_step_days(interval_length)  # validates the interval
+    circular = bool(records) and all(is_direction(str(r.get("description") or "")) for r in records)
     sums: dict[int, list[float]] = {}
     covered: dict[int, set[int]] = {}
     first_day, last_day = start_date.toordinal(), end_date.toordinal()
@@ -968,10 +1000,13 @@ def bin_records_indexed(
         if len(inside) < MIN_BIN_COVERAGE * length:
             dropped += 1
             continue
+        values = sums[index]
+        mean = _circular_mean(values) if circular else sum(values) / len(values)
+        if not math.isfinite(mean):
+            continue
         indices.append(index)
         labels.append(bin_first.strftime("%d.%m.%Y"))
-        values = sums[index]
-        means.append(round(sum(values) / len(values), 3))
+        means.append(round(mean, 3))
     if stats is not None:
         stats["dropped"] = dropped
     return indices, labels, means
@@ -1119,8 +1154,11 @@ def run_series_tools(
     tool_names: list[str],
     interval_length: tuple[float, str],
     labels: list[str] | None = None,
+    direction: bool = False,
 ) -> dict[str, Any]:
     """Run the analysis tools on a binned series (shared by point and area requests).
+
+    ``direction``: the series is a compass direction; no tool is run.
 
     ``indices`` are the interval numbers from :func:`bin_records_indexed`, so
     slopes are "per interval" and respect gaps; every slope is also given per
@@ -1128,6 +1166,15 @@ def run_series_tools(
     """
     if not tool_names:
         return {}
+    if direction:
+        return {
+            name: {
+                "available": False,
+                "error": "Directions wrap around at 360°, so trend tests on them are not meaningful.",
+                "observations": len(values),
+            }
+            for name in tool_names
+        }
     import plot_analysis  # late import: plot_analysis imports this module
 
     per_year = INTERVAL_DAYS["Year"] / interval_step_days(interval_length)
@@ -1138,6 +1185,8 @@ def _safe_events(records: list[dict[str, Any]], variables: list[str], unit: str 
     """Notable events of one variable's raw records (see :mod:`events`); never raises."""
     import events  # late import: events imports this module
 
+    if variables and all(is_direction(v) for v in variables):
+        return []
     try:
         return events.events_for_records(records, variables[0] if len(variables) == 1 else "", unit)
     except Exception:  # noqa: BLE001 - events are extra; the series must still be shown
@@ -1225,7 +1274,10 @@ def process_user_request(user_request: Any) -> dict[str, Any]:
             )
             sample_count = len(values)
             tool_names = [name for name in get_available_tools() if name in selected_tools]
-            tool_results = run_series_tools(indices, values, tool_names, interval_length, labels)
+            tool_results = run_series_tools(
+                indices, values, tool_names, interval_length, labels,
+                direction=bool(variables) and all(is_direction(v) for v in variables),
+            )
             mean_value = round(sum(values) / sample_count, 3) if sample_count else None
             topic_results[result_key] = {
                 "labels": labels,

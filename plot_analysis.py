@@ -30,8 +30,8 @@ from src.task import (
     theil_sen,
 )
 
-MAX_POINTS: int = 10_000
-"""Largest series accepted from the frontend."""
+MAX_POINTS: int = 40_000
+"""Largest series accepted from the frontend (100 years of daily values; all tools take ~5 s)."""
 
 MAX_GROUPS: int = 500
 """Most groups (e.g. one per year) accepted in one call to :func:`analyze_groups`."""
@@ -154,10 +154,9 @@ def _t_test(
     # information than their count: scale t by sqrt(n_eff / n).
     n = len(ys)
     residual = remove_seasonal_cycle(xs, ys, season_length)
-    residual = [
-        v - (sum(residual[:middle]) / middle if i < middle else sum(residual[middle:]) / (n - middle))
-        for i, v in enumerate(residual)
-    ]
+    early_level = float(sum(residual[:middle]) / middle)
+    late_level = float(sum(residual[middle:]) / (n - middle))
+    residual = [v - (early_level if i < middle else late_level) for i, v in enumerate(residual)]
     n_eff = effective_sample_size(n, lag1_autocorrelation(residual))
     p_adjusted = p_plain
     if n_eff < n and math.isfinite(t_value):

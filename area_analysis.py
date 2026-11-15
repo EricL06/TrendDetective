@@ -660,6 +660,12 @@ def _evaluate_variable(
     tools: list[str],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Area mean series and station dots for the records of one NOAA code."""
+    if records and all(task.is_direction(str(r.get("description") or "")) for r in records):
+        return _error_result(
+            region,
+            "Wind directions wrap around at 360°, so an area mean or trend of them is not "
+            "meaningful. Pick a point to see the direction at one station.",
+        ), []
     by_station: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         by_station.setdefault(str(record.get("station")), []).append(record)
@@ -736,7 +742,10 @@ def _evaluate_variable(
             "unit": next(iter(units)) if len(units) == 1 else None,
             "station_count": len(station_bins),
             "sources": _source_counts(by_station, station_bins),
-            "tools": task.run_series_tools(indices, values, tools, interval_length, labels),
+            "tools": task.run_series_tools(
+                indices, values, tools, interval_length, labels,
+                direction=all(task.is_direction(str(r.get("description") or "")) for r in records),
+            ),
             "events": _area_events(labels, values, records, units, step_days),
         }
     )

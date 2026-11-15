@@ -252,3 +252,38 @@ class CalendarBinningTest(unittest.TestCase):
         records += [{"date": f"2026-0{m}-15", "value": 2.0} for m in (1, 2, 3)]
         _, labels, _ = task.bin_records_indexed(records, date(2016, 1, 1), date(2026, 3, 31), (1, "Year"))
         self.assertEqual(labels[-1], "01.01.2025")
+
+
+class DirectionAndValidationTest(unittest.TestCase):
+    def test_wind_direction_is_averaged_on_the_circle_without_trend_tools(self) -> None:
+        records = [{"date": "2020-01-01", "value": v, "description": "wdf2"} for v in (350, 10)]
+        _, _, values = task.bin_records_indexed(records, date(2020, 1, 1), date(2020, 1, 1), (1, "Day"))
+        self.assertEqual(values, [0.0])
+        tools = task.run_series_tools([0, 1, 2], [1.0, 2.0, 3.0], ["Linear Regression"], (1, "Day"), direction=True)
+        self.assertFalse(tools["Linear Regression"]["available"])
+
+    def test_request_validation(self) -> None:
+        import interface
+
+        app_interface = interface.AppInterface()
+        app_interface.get_sorted_topics = lambda: ["temperature"]
+        for timeintervall, interval in [
+            (("01.01.1500", "31.12.2000"), (1, "Day")),
+            (("01.01.2020", "31.12.2021"), (1e-320, "Day")),
+            (("01.01.2020", "31.12.2021"), (5, "Year")),
+            (("01.01.2020", "31.12.2021"), (1, "Week")),
+        ]:
+            with self.assertRaises(ValueError):
+                app_interface.set_request_inputs({"temperature": True}, {}, timeintervall, interval)
+        app_interface.set_request_inputs({"temperature": True}, {}, ("01.01.2020", "31.12.2999"), (1, "Day"))
+        self.assertEqual(app_interface.timeintervall[1], date.today())
+
+    def test_json_never_contains_nan(self) -> None:
+        import app
+
+        self.assertEqual(app.to_json({"a": float("nan"), "b": [float("inf"), 1]}), '{"a": null, "b": [null, 1]}')
+
+    def test_fast_mann_kendall_s_is_exact(self) -> None:
+        y = np.round(np.random.default_rng(2).normal(0, 3, 4000), 1)
+        exact = sum(int(np.sign(y[i + 1 :] - y[i]).sum()) for i in range(len(y) - 1))
+        self.assertEqual(task._mann_kendall_s(y), exact)

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from http.server import HTTPServer, SimpleHTTPRequestHandler, ThreadingHTTPServer
 import importlib
 import json
+import math
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -43,6 +44,25 @@ def get_interface() -> interface.AppInterface:
         INTERFACE = interface.AppInterface()
         _LAST_MTIME = current_mtime
     return INTERFACE
+
+
+def _finite(value: Any) -> Any:
+    """``value`` with NaN / infinity replaced by ``None`` (recursively)."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _finite(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_finite(item) for item in value]
+    return value
+
+
+def to_json(data: Any) -> str:
+    """Strict JSON: Python writes NaN as ``NaN``, which browsers cannot parse."""
+    try:
+        return json.dumps(data, allow_nan=False)
+    except ValueError:
+        return json.dumps(_finite(data), allow_nan=False)
 
 
 PUBLIC_FILES: frozenset[str] = frozenset({"/", "/index.html", "/favicon.ico"})
@@ -132,7 +152,7 @@ class WebAppHandler(SimpleHTTPRequestHandler):
         :return: None
         :rtype: None
         """
-        payload = json.dumps(data).encode("utf-8")
+        payload = to_json(data).encode("utf-8")
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
@@ -290,7 +310,7 @@ class WebAppHandler(SimpleHTTPRequestHandler):
         topics = [name for name, checked in user_request.topics.items() if checked]
 
         def write(message: dict[str, Any]) -> None:
-            self.wfile.write(json.dumps(message).encode("utf-8") + b"\n")
+            self.wfile.write(to_json(message).encode("utf-8") + b"\n")
             self.wfile.flush()
 
         self.send_response(200)
