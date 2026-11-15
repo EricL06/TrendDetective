@@ -19,7 +19,7 @@
  *
  * Public API (window.TrendPlots):
  *   mount(element)                       build the panel inside `element`
- *   setData(visualization, userRequest)  data from GET /api/user-request
+ *   setData(visualization, userRequest)  data from the 'Apply' response
  *   setLoading(boolean)
  *
  * The only server call is POST /api/analyze (plot_analysis.py).
