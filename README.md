@@ -10,10 +10,18 @@ changed, and quantifies every trend with significance tests that account for aut
 
 ## Quick start
 
+Requires Python 3.11 or newer.
+
 ```bash
-python -m pip install -r requirements.txt
-python3 app.py
+git clone https://github.com/EricL06/TrendDetective.git
+cd TrendDetective
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python app.py
 ```
+
+On Windows use `.venv\Scripts\python` instead of `.venv/bin/python`. The install is large
+(about 900 MB, mostly PyTorch) and takes a few minutes the first time.
 
 Open http://127.0.0.1:8000. No API keys are needed. A first-visit tour and the **?** button
 explain the page.
