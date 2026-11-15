@@ -1637,6 +1637,7 @@
         if (model.info.error) hints.push(model.info.error);
         if (model.unit === 'mm/day') hints.push('Precipitation is shown as a density: the average rainfall per day (mm/day) in each interval. Monthly or yearly totals and multiday totals (MDPR) are divided by the number of days they cover, so 3 mm/day over a month means about 90 mm in that month.');
         else if (model.unit === '% of days') hints.push('Share of days in each interval on which precipitation reached the threshold (monthly / yearly rain-day counts divided by the number of days), e.g. 50 % = every second day.');
+        if (model.info.dropped_intervals > 0) hints.push(`${model.info.dropped_intervals} interval${model.info.dropped_intervals === 1 ? ' was' : 's were'} left out because data covered less than three quarters of their days (e.g. a year with only its first months); their means would bias the trend.`);
         if (!model.points.length) hints.push('This topic has no numeric values in the selected time range.');
         else if (!model.canCompare) hints.push(`Comparing years needs intervals of up to 2 months; the current interval is ${model.ivText}. Choose Day or Month intervals.`);
         else if (model.years.length < 2) hints.push('The time range covers only one year. Choose a range over several years to compare them.');

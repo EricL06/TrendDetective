@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import math
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -55,6 +56,71 @@ it reports marine "stations" next to any point (even inland) and cannot be
 used to size the box. About 1 degree collects enough reports at sea; a
 smaller box often holds only a handful of passing ships per month.
 """
+
+MAX_MARINE_MONTHS: int = 120
+"""Longest marine request (months). Reports are fetched month by month; ten
+years take about two minutes. Longer ranges get a clear error pointing to the
+ERA5 topics instead of a request that runs into a timeout."""
+
+MARINE_PARALLEL_REQUESTS: int = 4
+"""Marine months fetched at the same time."""
+
+MARINE_CACHE_DIR: Path = Path("data/cache/marine")
+"""Finished past months are stored here; ship reports of a past month do not change."""
+
+_VISIBILITY_KM: dict[int, float] = {
+    90: 0.05, 91: 0.05, 92: 0.2, 93: 0.5, 94: 1.0, 95: 2.0, 96: 4.0, 97: 10.0, 98: 20.0, 99: 50.0,
+}
+"""WMO code table 4377 (ship visibility codes 90-99) as distance in km (90 = below 50 m, 99 = 50 km or more)."""
+
+_MARINE_VALID: dict[str, tuple[float, float]] = {
+    "wind_dir": (0.0, 360.0),  # 361/362 = variable or calm, not a direction
+    "rel_wind_dir": (0.0, 360.0),
+    "tot_cld_amt": (0.0, 8.0),  # 9 = sky obscured, not an amount of oktas
+    "low_cld_amt": (0.0, 8.0),
+    "sea_surf_temp": (-2.5, 40.0),
+    "air_temp": (-70.0, 60.0),
+    "dew_pt_temp": (-80.0, 40.0),
+    "wet_bulb_temp": (-70.0, 45.0),
+    "sea_lvl_pres": (850.0, 1090.0),
+}
+"""Physically possible range of marine values; anything outside is a code or an error."""
+
+
+def _clean_marine_rows(collections: list[list[dict[str, Any]]]) -> list[list[dict[str, Any]]]:
+    """Make ship and buoy reports usable as a time series.
+
+    * code values outside :data:`_MARINE_VALID` are dropped,
+    * ``visibility`` codes 90-99 become kilometres,
+    * one report per platform, variable and hour is kept: a moored buoy
+      reporting every 10 minutes would otherwise outweigh every ship in the
+      box (4,459 of 4,628 rows in one test month).
+    """
+    cleaned: list[list[dict[str, Any]]] = []
+    for collection in collections:
+        seen: set[tuple[Any, str, str]] = set()
+        kept: list[dict[str, Any]] = []
+        for record in collection:
+            code = str(record.get("description") or "")
+            value = record.get("value")
+            if code == "visibility":
+                if not isinstance(value, (int, float)) or int(value) not in _VISIBILITY_KM:
+                    continue
+                record = {**record, "value": _VISIBILITY_KM[int(value)], "unit": "km"}
+            elif code in _MARINE_VALID and isinstance(value, (int, float)):
+                low, high = _MARINE_VALID[code]
+                if not low <= value <= high:
+                    continue
+            hour = str(record.get("date") or "")[:13]
+            key = (record.get("station"), code, hour)
+            if key in seen:
+                continue
+            seen.add(key)
+            kept.append(record)
+        if kept:
+            cleaned.append(kept)
+    return cleaned
+
 
 MAX_STATION_ATTEMPTS: int = 5
 """Nearest matching stations tried until one has values in the date range."""
@@ -634,16 +700,8 @@ class NOAAClient:
             data_params["boundingBox"] = self._make_bounding_box(
                 request.latitude, request.longitude, MARINE_BOX_DEGREES
             )
-            raw_payload: list[Any] = []
-            for chunk_start, chunk_end in self._month_chunks(
-                request.start_date, request.end_date
-            ):
-                data_params["startDate"] = chunk_start.isoformat()
-                data_params["endDate"] = chunk_end.isoformat()
-                chunk: Any = self._get_json(BASE_URL, data_params)
-                if isinstance(chunk, list):
-                    raw_payload.extend(chunk)
-            payload = _normalize_observations(raw_payload)
+            raw_payload = self._fetch_marine_months(request, dict(data_params))
+            payload = _clean_marine_rows(_normalize_observations(raw_payload))
         else:
             # The Search Service matches a station's whole period of record,
             # so the nearest match often stopped reporting these codes years
@@ -975,6 +1033,59 @@ class NOAAClient:
             * math.sin(delta_longitude_rad / 2) ** 2
         )
         return 2 * earth_radius_km * math.asin(math.sqrt(haversine))
+
+    def _fetch_marine_months(self, request: PointDataRequest, params: dict[str, str]) -> list[Any]:
+        """All marine rows of the range: months in parallel, past months cached.
+
+        A failing month is skipped (its reports are missing) instead of
+        discarding the whole series; if every month fails the first error is
+        raised.
+
+        :raises ValueError: If the range is longer than :data:`MAX_MARINE_MONTHS`.
+        """
+        months = self._month_chunks(request.start_date, request.end_date)
+        if len(months) > MAX_MARINE_MONTHS:
+            raise ValueError(
+                f"Ship and buoy reports are fetched month by month; {len(months)} months would take too long. "
+                f"Choose at most {MAX_MARINE_MONTHS // 12} years, or use an ERA5 topic for long series."
+            )
+        recent = date.today() - timedelta(days=60)
+
+        def fetch(chunk: tuple[date, date]) -> list[Any]:
+            first, last = chunk
+            key = "_".join(
+                [params["dataset"], params["dataTypes"].replace(",", "-"), params["boundingBox"].replace(",", "_"), first.isoformat(), last.isoformat()]
+            )
+            cache = MARINE_CACHE_DIR / f"{key}.json"
+            if last < recent and cache.exists():
+                try:
+                    return json.loads(cache.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    pass
+            client = NOAAClient(timeout=self.timeout, max_request_seconds=self.max_request_seconds)
+            rows = client._get_json(BASE_URL, {**params, "startDate": first.isoformat(), "endDate": last.isoformat()})
+            rows = rows if isinstance(rows, list) else []
+            if last < recent:
+                try:
+                    cache.parent.mkdir(parents=True, exist_ok=True)
+                    temporary = cache.with_name(f"{cache.name}.{id(rows)}.part")
+                    temporary.write_text(json.dumps(rows), encoding="utf-8")
+                    temporary.replace(cache)
+                except OSError:
+                    pass  # read-only file system: no cache
+            return rows
+
+        rows: list[Any] = []
+        errors: list[Exception] = []
+        with ThreadPoolExecutor(max_workers=MARINE_PARALLEL_REQUESTS) as pool:
+            for future in [pool.submit(fetch, chunk) for chunk in months]:
+                try:
+                    rows.extend(future.result())
+                except NOAAError as error:
+                    errors.append(error)
+        if errors and len(errors) == len(months):
+            raise errors[0]
+        return rows
 
     @staticmethod
     def _month_chunks(start: date, end: date) -> list[tuple[date, date]]:
