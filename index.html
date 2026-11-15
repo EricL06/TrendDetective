@@ -241,6 +241,9 @@
             font-size: 0.95rem;
             color: #334155;
         }
+        .task-output > summary { cursor: pointer; list-style-position: inside; }
+        .task-output > summary h3 { display: inline; margin: 0; }
+        .task-output[open] > summary { margin-bottom: 0.75rem; }
         .viz-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -825,12 +828,13 @@
             <div id="plot-panel"></div>
         </section>
 
-        <div class="status-card">
-            <h3>Request Visualization &amp; Task Output (<code>src/task.py</code>)</h3>
+        <!-- Raw task output per series; the same figures are in the plot panel's data summaries. -->
+        <details class="status-card task-output">
+            <summary><h3>Raw task output per series (<code>src/task.py</code>)</h3></summary>
             <div id="visualization-container" class="viz-grid">
                 <div class="empty-message">Select topics, fill the timeintervall, and click "Apply" to run tasks and visualize results.</div>
             </div>
-        </div>
+        </details>
     </main>
 
     <script>
