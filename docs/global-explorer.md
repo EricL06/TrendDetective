@@ -104,7 +104,29 @@ Weitere: CSV-Export der Regionszeitreihen, „Link teilen“ (kompletter Zustand
 verstellbare Höhe des Analysebereichs, Handy-Layout, Tastatur im Einzeljahr-Modus
 (← → Jahr, Leertaste = Abspielen).
 
-## 4. Methodik (Kurzfassung)
+## 4. Demo-Pfad (für den Pitch, ca. 3 Minuten)
+
+Alle Links setzen den kompletten Zustand (Server lokal auf Port 8000):
+
+1. **Die Welt erwärmt sich ungleich** – Trendkarte 1979–2025, Punkte = nicht signifikant:
+   <http://127.0.0.1:8000/explorer/#k=trend&p=1979-2025&s=annual&b=1951-1980>
+2. **146 Jahre im Zeitraffer** – Einzeljahr-Modus, ▶ drücken:
+   <http://127.0.0.1:8000/explorer/#k=year&y=1880&s=annual&b=1951-1980>
+3. **Mittelmeer vs. Antarktis vs. Südpazifik vs. NRW** – Zeitreihe, dann „Statistik“
+   (Kurzfazit + Faktor ggü. global):
+   <http://127.0.0.1:8000/explorer/#k=trend&p=1979-2025&s=annual&b=1951-1980&r=mediterranean|antarctica|south_pacific|nrw&t=stats>
+4. **Wird es schneller?** – „Erwärmungstempo“ (gleitender 30-Jahres-Trend):
+   <http://127.0.0.1:8000/explorer/#k=acceleration&p=1979-2025&s=annual&b=1951-1980&r=mediterranean|arctic|nrw|global&t=tempo>
+5. **Wer erwärmt sich am schnellsten?** – Ranking aller Regionen:
+   <http://127.0.0.1:8000/explorer/#k=trend&p=1979-2025&s=annual&b=1951-1980&t=ranking>
+6. **Arktische Verstärkung** – Hovmöller-Diagramm „Breitengrade“:
+   <http://127.0.0.1:8000/explorer/#k=trend&p=1979-2025&s=annual&b=1951-1980&r=arctic|antarctica&t=zonal>
+7. **Hitzesommer werden normal** – „Extreme“, Sommer (JJA), Deutschland & Mittelmeer:
+   <http://127.0.0.1:8000/explorer/#k=anomaly&p=1979-2025&s=JJA&b=1951-1980&r=germany|mediterranean&t=dist>
+8. **Und der Regen?** – Niederschlag, relativer Trend:
+   <http://127.0.0.1:8000/explorer/#d=gpcp&k=trend_rel&p=1979-2025&s=annual&b=1991-2020&r=mediterranean|sahara|amazon|arctic&t=stats>
+
+## 5. Methodik (Kurzfassung)
 
 * Jahres-/Saisonmittel aus Monatswerten; ein Jahr zählt, wenn ≥ ⅔ der Monate Daten haben.
   Der laufende, noch unvollständige Zeitraum wird weggelassen; Winter (DJF) nutzt den
@@ -126,7 +148,7 @@ Validierung (1979–2025, Jahresmittel): globaler Trend **+0,21 ± 0,04 °C/Deka
 ≈ +1,2 °C ggü. 1951–1980 – konsistent mit den NASA-Veröffentlichungen. Niederschlag: globaler
 Trend ≈ 0, Arktis signifikant feuchter (+4 %/Dekade).
 
-## 5. Dateien
+## 6. Dateien
 
 | Datei | Inhalt |
 |---|---|
@@ -140,7 +162,7 @@ Trend ≈ 0, Arktis signifikant feuchter (+4 %/Dekade).
 `app.py` hat nur zwei Ergänzungen (Weiterleitung der `/api/global/`-Anfragen, Redirect
 `/explorer` → `/explorer/`).
 
-## 6. Grenzen & nächste Schritte
+## 7. Grenzen & nächste Schritte
 
 * **Auflösung 2°** (~220 km): NRW besteht aus 6 Teilzellen. Für Städte/kleine Regionen ist die
   Stationsanalyse besser – beides ergänzt sich (Idee: Klick im Explorer → „Stationen hier
