@@ -52,8 +52,8 @@
 
     const HELP_HTML = `
         <h3>Getting started</h3>
-        <p>Pick a place on the map, tick one or more variables, set the time span and press <strong>Analyze</strong>.
-        Or choose a <strong>suggested case study</strong> to jump straight to a documented extreme event.</p>
+        <p>Pick a place on the map, tick one or more variables, set the time range and press <strong>Analyze</strong>.
+        Or pick an event in the <strong>Try an event</strong> row above the map to jump straight to a documented extreme.</p>
 
         <h3>Simple and Scientific mode</h3>
         <ul>
@@ -64,7 +64,7 @@
 
         <h3>Place</h3>
         <ul>
-            <li>Click the map to pick a <strong>point</strong>, or use the selection tools to draw an <strong>area</strong>. <strong>Areas</strong> offers ready-made regions.</li>
+            <li><strong>Point</strong>: click the map to pick a place. <strong>Box</strong>: drag a rectangle (up to 1,000,000 km²); the stations inside it with data for your variables and time range are listed under the map and shown as dots. <strong>Areas</strong> offers ready-made regions. <strong>Edit</strong> moves or resizes the selection.</li>
             <li><strong>Search</strong> a city, region or coordinates (lat, lon) in the box on the map.</li>
             <li>For a notable day in the results you can show that day's <strong>satellite image</strong> on the map and step day by day.</li>
         </ul>
@@ -72,19 +72,22 @@
         <h3>Variables and time</h3>
         <ul>
             <li>Search and tick variables in the list (station data, weather model, satellite, marine). A <span class="th-x">✕</span> means no data in the selected area.</li>
-            <li>Dates are written as <strong>DD.MM.YYYY</strong>. In Scientific mode, <strong>Interval length</strong> sets how values are grouped (e.g. 1 Month).</li>
+            <li>Dates are written as <strong>DD.MM.YYYY</strong>, or use a quick range (10, 30, 50 years, since 1950). In Scientific mode, <strong>Average per</strong> sets how values are grouped (e.g. 1 Month).</li>
         </ul>
 
         <h3>Results in Simple mode</h3>
-        <p>Key findings first, then widgets per variable: trend, the whole record, seasons, a typical year, sudden shifts,
-        decades and extremes, plus how the variables relate. Every widget has a “How this was worked out” fold-out.</p>
+        <p>Key findings first, then per variable a grid of tiles: trend, the whole record, seasons, a typical year, sudden shifts,
+        decades and extremes, plus how the variables relate. <strong>Click a tile</strong> to flip it open with its chart and details.</p>
 
         <h3>Results in Scientific mode</h3>
         <ul>
             <li>Timeline, years overlaid, or one period across the years; anomalies and moving averages.</li>
             <li>Trends with OLS, Sen's slope and the Mann-Kendall test; change points.</li>
             <li>Change over time (per decade, running trend) and comparisons and correlations between variables, including lags.</li>
-        </ul>`;
+        </ul>
+
+        <h3>Global Explorer</h3>
+        <p>The <strong>🌍 Global Explorer</strong> link under Analyze opens a globe built on gridded data (NASA GISTEMP temperature, GPCP precipitation) to compare trends of any regions worldwide.</p>`;
 
     let helpBtn = null;
     let dialog = null;
@@ -145,7 +148,7 @@
     const all = (...sels) => sels.map((s) => (typeof s === 'string' ? $(s) : s)).filter(Boolean);
     const timeGroup = () => {
         const start = $('#timeintervall-start');
-        return start ? start.closest('.field-group') : null;
+        return start ? start.closest('.sb-section') : null;
     };
 
     const STEPS = [
@@ -161,7 +164,7 @@
         {
             title: 'Pick a place',
             targets: () => all('.map-box'),
-            text: () => 'Click the map to choose a point, or draw an area with the selection tools. <strong>Areas</strong> offers ready-made regions.',
+            text: () => 'Click the map to choose a <strong>point</strong>, or drag a <strong>Box</strong>: the stations inside it are listed under the map. <strong>Areas</strong> offers ready-made regions.',
         },
         {
             title: 'Search a place',
@@ -169,21 +172,21 @@
             text: () => 'Type a city, a region or coordinates (lat, lon) and the map zooms there.',
         },
         {
-            title: 'Or start with a case study',
+            title: 'Or try an event',
             targets: () => all('#examples-card'),
-            text: () => 'These are documented extremes such as heat waves or floods. Choosing one loads ten years of daily data at that site and jumps to the event.',
+            text: () => 'Documented extremes such as heat waves or floods. Scroll the row with ‹ ›; choosing one loads ten years of data around it and jumps to the event.',
         },
         {
             title: 'Choose variables',
-            targets: () => all('.search-wrapper', '#topics-dropdown'),
-            text: () => 'Search and tick the variables you want, e.g. temperature or precipitation. A red <span class="th-x">✕</span> means there is no data for it in the selected area.',
+            targets: () => all('.sb-variables'),
+            text: () => 'Search and tick the variables you want, e.g. temperature or precipitation; your choice shows as chips. A red <span class="th-x">✕</span> means there is no data for it in the selected area.',
         },
         {
-            title: 'Set the time span',
-            targets: () => all(timeGroup(), '.field-group-advanced'),
+            title: 'Set the time range',
+            targets: () => all(timeGroup()),
             text: () => (currentMode() === 'scientific'
-                ? 'Enter start and end dates as DD.MM.YYYY. <strong>Interval length</strong> sets how values are grouped, e.g. 1 Month for monthly means.'
-                : 'Enter start and end dates as DD.MM.YYYY. In Scientific mode you can also set how values are grouped (daily, monthly, yearly).'),
+                ? 'Enter start and end as DD.MM.YYYY or pick a quick range. <strong>Average per</strong> sets how values are grouped, e.g. 1 Month for monthly means.'
+                : 'Enter start and end as DD.MM.YYYY or pick a quick range (10, 30, 50 years, since 1950).'),
         },
         {
             title: 'Analyze',
@@ -198,7 +201,7 @@
                 const where = centered ? 'After you press Analyze, results appear below the map. ' : 'Results appear here, below the map. ';
                 return where + (currentMode() === 'scientific'
                     ? 'Add time frames and pick analyses: trends (OLS, Sen\'s slope, Mann-Kendall), change points, comparisons and correlations.'
-                    : 'Key findings come first, then widgets for trend, records, seasons, decades, extremes and how the variables relate.');
+                    : 'Key findings come first, then tiles for trend, records, seasons, decades, extremes and how the variables relate. Click a tile to flip it open.');
             },
         },
         {
