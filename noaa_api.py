@@ -774,11 +774,11 @@ class NOAAClient:
         first box that contains a station with matching data wins, and its
         stations are returned ranked by :meth:`_rank_stations`.
 
-        The Search Service only returns stations that report *all* listed
-        data types. Topics such as ``precipitation`` list optional codes
-        (``MDPR``, ``DAPR``) that most stations never report, so when the
-        combined search finds nothing, every data type is searched on its
-        own and the results are merged.
+        Each box is searched once without a ``dataTypes`` filter (the
+        Service would only return stations reporting *all* listed codes);
+        the codes are matched locally. Only when a dense box was cut off at
+        1000 results and nothing matched is the topic's main code searched
+        explicitly, so a box costs at most two requests.
 
         :param request: Point, topic and inclusive date range to retrieve.
         :type request: PointDataRequest
@@ -789,36 +789,50 @@ class NOAAClient:
         :rtype: tuple[list[tuple[str, tuple[str, ...]]], float]
         :raises NOAAError: If even the largest box contains no matching station.
         """
-        type_groups: list[tuple[str, ...]] = [topic.data_types]
-        if len(topic.data_types) > 1:
-            type_groups += [(code,) for code in topic.data_types]
+        fallback: tuple[list[tuple[str, tuple[str, ...]]], float] | None = None
         for radius in self.search_radii_degrees:
             bbox: str = self._make_bounding_box(
                 request.latitude, request.longitude, radius
             )
-            results: list[Any] = []
-            for group_index, data_types in enumerate(type_groups):
-                if group_index == 1 and results:
-                    break  # the combined search already found stations
-                search_params: dict[str, str] = {
-                    "dataset": topic.dataset,
-                    "dataTypes": ",".join(data_types),
-                    "startDate": f"{request.start_date.isoformat()}T00:00:00",
-                    "endDate": f"{request.end_date.isoformat()}T23:59:59",
-                    "bbox": bbox,
-                    "limit": "1000",
-                    "offset": "0",
-                }
-                search_payload: Any = self._get_json(SEARCH_URL, search_params)
-                if isinstance(search_payload, dict):
-                    results.extend(search_payload.get("results", []))
-            candidates: list[tuple[str, tuple[str, ...]]] = self._rank_stations(
-                {"results": results},
-                request=request,
-                requested_types=topic.data_types,
+            base_params: dict[str, str] = {
+                "dataset": topic.dataset,
+                "startDate": f"{request.start_date.isoformat()}T00:00:00",
+                "endDate": f"{request.end_date.isoformat()}T23:59:59",
+                "bbox": bbox,
+                "limit": "1000",
+                "offset": "0",
+            }
+            # One search without a code filter: every station lists its codes,
+            # so they are matched locally (_rank_stations). Searching each code
+            # on its own cost up to ~185 requests for a topic with many codes.
+            search_payload: Any = self._get_json(SEARCH_URL, base_params)
+            results: list[Any] = (
+                list(search_payload.get("results", [])) if isinstance(search_payload, dict) else []
             )
-            if candidates:
-                return candidates, radius
+            truncated = isinstance(search_payload, dict) and int(
+                search_payload.get("count", 0) or 0
+            ) > len(results)
+            ranked = self._rank_with_coverage(
+                {"results": results}, request=request, requested_types=topic.data_types
+            )
+            if not ranked and truncated:
+                # A dense box can hide matching stations beyond the first
+                # 1000 results: ask once more for the topic's main code.
+                filtered: Any = self._get_json(
+                    SEARCH_URL, {**base_params, "dataTypes": topic.data_types[0]}
+                )
+                if isinstance(filtered, dict):
+                    ranked = self._rank_with_coverage(
+                        filtered, request=request, requested_types=topic.data_types
+                    )
+            if ranked and ranked[0][2]:
+                return [(station, types) for station, types, _ in ranked], radius
+            if ranked and fallback is None:
+                # Only short records here: look a little farther for a
+                # station covering the range, but keep these as a fallback.
+                fallback = ([(station, types) for station, types, _ in ranked], radius)
+        if fallback is not None:
+            return fallback
         raise NOAAError(
             "No NOAA station with the requested data types was found within "
             f"{self.search_radii_degrees[-1]} degrees of the selected point. "
@@ -832,6 +846,21 @@ class NOAAClient:
         request: PointDataRequest,
         requested_types: tuple[str, ...],
     ) -> list[tuple[str, tuple[str, ...]]]:
+        """Ranked ``(station id, matching codes)``; see :meth:`_rank_with_coverage`."""
+        return [
+            (station, types)
+            for station, types, _ in NOAAClient._rank_with_coverage(
+                search_payload, request=request, requested_types=requested_types
+            )
+        ]
+
+    @staticmethod
+    def _rank_with_coverage(
+        search_payload: Any,
+        *,
+        request: PointDataRequest,
+        requested_types: tuple[str, ...],
+    ) -> list[tuple[str, tuple[str, ...], bool]]:
         """Rank the stations that report at least one requested data type.
 
         Stations whose period of record spans at least
@@ -908,10 +937,11 @@ class NOAAClient:
                     )
                     candidates.append((key, str(station_id_value), matching_types))
         candidates.sort(key=lambda candidate: candidate[0])
-        ranked: dict[str, tuple[str, ...]] = {}
-        for _, station_id, matching_types in candidates:
-            ranked.setdefault(station_id, matching_types)
-        return list(ranked.items())
+        ranked: dict[str, tuple[tuple[str, ...], bool]] = {}
+        for key, station_id, matching_types in candidates:
+            # key[0] is "not good": the record spans < GOOD_RECORD_COVERAGE.
+            ranked.setdefault(station_id, (matching_types, not key[0]))
+        return [(station, types, good) for station, (types, good) in ranked.items()]
 
     @staticmethod
     def _distance_km(

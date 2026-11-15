@@ -45,6 +45,18 @@ def get_interface() -> interface.AppInterface:
     return INTERFACE
 
 
+PUBLIC_FILES: frozenset[str] = frozenset({"/", "/index.html", "/favicon.ico"})
+"""Files outside ``static/`` that the server delivers."""
+
+
+def _is_public_path(path: str) -> bool:
+    """Whether a GET path may be served from disk (the page and ``static/`` only)."""
+    clean = unquote(path)
+    if ".." in clean.split("/"):
+        return False
+    return clean in PUBLIC_FILES or clean.startswith("/static/")
+
+
 @dataclass(frozen=True)
 class ServerConfig:
     """Configuration parameters for the HTTP web server.
@@ -190,6 +202,10 @@ class WebAppHandler(SimpleHTTPRequestHandler):
             )
             return
 
+        if not _is_public_path(url.path):
+            # Only the page and static/ are served: never source code, .git, .venv or data/.
+            self.send_error(404, "File not found")
+            return
         super().do_GET()
 
     def _handle_analyze(self) -> None:

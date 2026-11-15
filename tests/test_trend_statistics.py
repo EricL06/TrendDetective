@@ -137,3 +137,33 @@ class StationRankingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeseasonalisedToolsTest(unittest.TestCase):
+    def test_monthly_trend_is_found_despite_the_seasonal_cycle(self) -> None:
+        rng = np.random.default_rng(3)
+        months = np.arange(600)
+        y = 9 + 9 * np.sin(2 * np.pi * (months - 3) / 12) + 0.004 * months + rng.normal(0, 1.6, 600)
+        result = plot_analysis.run_tools(list(months), list(y), ["Linear Regression", "t-Test"], per_year=12)
+        self.assertTrue(result["Linear Regression"]["significant"])
+        self.assertTrue(result["Linear Regression"]["deseasonalised"])
+        self.assertAlmostEqual(result["Linear Regression"]["slope_per_decade"], 0.48, delta=0.1)
+
+    def test_partial_years_do_not_fake_a_trend(self) -> None:
+        # January to June of each year plus one extra January: the raw series ends in
+        # winter, which pulls a plain regression down.
+        days = np.arange(0, 365 * 6 + 31)
+        y = 10 * np.sin(2 * np.pi * (days - 110) / 365.25) + np.random.default_rng(1).normal(0, 1, days.size)
+        result = plot_analysis.run_tools(list(days), list(y), ["Linear Regression"], per_year=365.2425)
+        self.assertFalse(result["Linear Regression"]["significant"])
+        self.assertLess(abs(result["Linear Regression"]["slope_per_decade"]), 0.5)
+
+
+class ServedFilesTest(unittest.TestCase):
+    def test_only_page_and_static_are_public(self) -> None:
+        import app
+
+        for path in ("/", "/index.html", "/static/plots/plots.js"):
+            self.assertTrue(app._is_public_path(path), path)
+        for path in ("/app.py", "/.git/config", "/static/../app.py", "/static/%2e%2e/app.py", "/data/cache/x"):
+            self.assertFalse(app._is_public_path(path), path)
