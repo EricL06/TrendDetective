@@ -693,14 +693,29 @@ def _evaluate_variable(
             "values": values,
             "mean": round(sum(values) / len(values), 3) if values else None,
             "variables": sorted({str(r["description"]) for r in records if r.get("description")}),
-            "unit": units.pop() if len(units) == 1 else None,
+            "unit": next(iter(units)) if len(units) == 1 else None,
             "station_count": len(station_bins),
             "sources": _source_counts(by_station, station_bins),
             "tools": task.run_series_tools(indices, values, tools, interval_length, labels),
+            "events": _area_events(labels, values, records, units, step_days),
         }
     )
     del result["error"]
     return result, station_features
+
+
+def _area_events(
+    labels: list[str], values: list[float], records: list[dict[str, Any]], units: set[Any], step_days: float
+) -> list[dict[str, Any]]:
+    """Notable events of the area mean series (see :mod:`events`); never raises."""
+    import events
+
+    codes = sorted({str(r.get("description") or "") for r in records})
+    unit = next(iter(units)) if len(units) == 1 else None
+    try:
+        return events.events_for_series(labels, values, codes[0] if len(codes) == 1 else "", unit, step_days)
+    except Exception:  # noqa: BLE001 - events are extra
+        return []
 
 
 def process_region_request(user_request: Any, region: Region) -> dict[str, Any]:

@@ -955,6 +955,16 @@ def run_series_tools(
     return plot_analysis.run_tools(indices, values, tool_names, per_year=per_year, labels=labels)
 
 
+def _safe_events(records: list[dict[str, Any]], variables: list[str], unit: str | None) -> list[dict[str, Any]]:
+    """Notable events of one variable's raw records (see :mod:`events`); never raises."""
+    import events  # late import: events imports this module
+
+    try:
+        return events.events_for_records(records, variables[0] if len(variables) == 1 else "", unit)
+    except Exception:  # noqa: BLE001 - events are extra; the series must still be shown
+        return []
+
+
 def process_user_request(user_request: Any) -> dict[str, Any]:
     """Fetch, aggregate, and analyze all selected topics in a ``UserRequest``.
 
@@ -1046,6 +1056,7 @@ def process_user_request(user_request: Any) -> dict[str, Any]:
                 "variables": variables,
                 "unit": unit,
                 "tools": tool_results,
+                "events": _safe_events(records, variables, unit),
             }
 
             properties: dict[str, Any] = {
