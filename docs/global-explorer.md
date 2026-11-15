@@ -95,8 +95,14 @@ Werte gemittelt und nicht in Datenlücken hinein extrapoliert. Leere Zellen blei
 | Ranking | alle vordefinierten Regionen nach Trend, mit KI und Faktor ggü. global; Klick fügt hinzu |
 | Breitengrade | Hovmöller-Diagramm (Zonalmittel × Jahr) – zeigt z. B. die arktische Verstärkung |
 
+**Diagramme direkt in der Karte:** Jede gewählte Region bekommt auf dem Globus eine kleine
+Karte mit Sparkline (Jahreswerte + 11-Jahres-Mittel) und Trend, verbunden mit einer Linie zur
+Region. Die Karten weichen einander und den Bedienfeldern aus und verschwinden hinter dem
+Horizont des Globus. Klick → Statistik.
+
 Weitere: CSV-Export der Regionszeitreihen, „Link teilen“ (kompletter Zustand in der URL),
-verstellbare Höhe des Analysebereichs, Handy-Layout.
+verstellbare Höhe des Analysebereichs, Handy-Layout, Tastatur im Einzeljahr-Modus
+(← → Jahr, Leertaste = Abspielen).
 
 ## 4. Methodik (Kurzfassung)
 
