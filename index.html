@@ -518,7 +518,8 @@
             max-width: 240px;
         }
         .map-legend[hidden] { display: none; }
-        .map-legend-title { font-weight: 700; margin-bottom: 2px; }
+        .map-legend-title { font-weight: 700; margin-bottom: 2px; cursor: pointer; }
+        .map-legend details:not([open]) .map-legend-title { margin-bottom: 0; }
         .map-legend-row { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
         .map-legend-dot { width: 11px; height: 11px; border-radius: 50%; border: 1px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.15); flex: none; }
         .satellite-bar {
@@ -1200,6 +1201,7 @@
             selectedTopics.temperature = true;
         })();
         loadTopics();
+        refreshRegions();
 
         document.getElementById('topic-search').addEventListener('input', async (event) => {
             if (!topicsDropdown.classList.contains('open')) {
@@ -1934,14 +1936,16 @@
             const hasStations = ids.includes('measuring-stations');
             if (!hasTrend && !hasStations) { box.hidden = true; return; }
             const row = (color, label) => `<div class="map-legend-row"><span class="map-legend-dot" style="background:${color}"></span>${label}</div>`;
-            let html = '<div class="map-legend-title">Trend of the result</div>';
+            const open = box.dataset.collapsed !== '1';
+            let html = `<details${open ? ' open' : ''}><summary class="map-legend-title">Trend colours</summary>`;
             if (hasTrend) {
                 html += row('#dc2626', 'rising (significant)') + row('#fca5a5', 'rising (not significant)')
                     + row('#93c5fd', 'falling (not significant)') + row('#2563eb', 'falling (significant)') + row('#94a3b8', 'no trend / not computed');
             }
             if (hasStations) html += row('#7c3aed', 'measuring station used');
             if (ids.some((id) => id.startsWith('area-stations-'))) html += '<div class="map-legend-row" style="color:#64748b">area: each dot is one station, coloured by its own trend</div>';
-            box.innerHTML = html;
+            box.innerHTML = `${html}</details>`;
+            box.querySelector('details').addEventListener('toggle', (e) => { box.dataset.collapsed = e.target.open ? '0' : '1'; });
             box.hidden = false;
         };
     </script>
