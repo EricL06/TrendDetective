@@ -62,7 +62,7 @@ a { color: var(--accent); }
 .dataset { margin: 0; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .topnav { display: flex; gap: 6px; }
 .seg.ds-seg { display: inline-flex; gap: 0; border: 1px solid var(--line); border-radius: 999px; padding: 2px; background: var(--surface); }
-.seg.ds-seg button { border: none; border-radius: 999px; padding: 4px 12px; font-size: 12px; background: transparent; }
+.seg.ds-seg button { white-space: nowrap; border: none; border-radius: 999px; padding: 4px 12px; font-size: 12px; background: transparent; }
 .seg.ds-seg button[aria-checked="true"] { background: var(--accent-soft); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent); }
 .ghost {
   background: transparent; border: 1px solid var(--line); border-radius: 999px;
@@ -359,6 +359,8 @@ dialog p, dialog li { color: var(--text-2); font-size: 13px; }
   .topnav .ghost { padding: 4px 9px; font-size: 11px; }
   #btn-about { display: none; }
   .brand h1 span { display: none; }
+  .topbar { gap: 8px; }
+  .brand > div { display: none; }
   .dataset { display: none; }
   .seg.ds-seg button { padding: 3px 8px; font-size: 11px; }
   .layout {

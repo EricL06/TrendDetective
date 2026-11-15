@@ -298,6 +298,8 @@ function buildListeners() {
   });
   setupResize();
   if (window.matchMedia("(max-width: 760px)").matches) {
+    state.mapCharts = false; // too little room for chips on a phone
+    $("opt-mapcharts").checked = false;
     $("controls").classList.add("collapsed");
     $("btn-collapse-controls").textContent = "+";
   }
