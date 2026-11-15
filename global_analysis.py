@@ -533,7 +533,8 @@ def layer(ds: GriddedDataset, kind: str = "trend", start: Any = None, end: Any =
         values = fit["slope"] * 10
         if kind == "trend_rel":
             with np.errstate(invalid="ignore", divide="ignore"):
-                values = np.where(ds.clim > 0.1, values / ds.clim * 100, np.nan)  # skip near-rainless cells
+                clim = season_clim(ds, season)
+                values = np.where(clim > 0.1, values / clim * 100, np.nan)  # skip near-rainless cells
         sig = fit["p"] < 0.05
         sig = np.where(np.isfinite(values), sig, False)
     elif kind == "anomaly":
@@ -716,11 +717,20 @@ def _series_stats(years: np.ndarray, values: np.ndarray, start_y: int, end_y: in
     return result
 
 
-def _region_clim(ds: GriddedDataset, weights: np.ndarray) -> float | None:
-    ok = np.isfinite(ds.clim) & (weights > 0)
+def season_clim(ds: GriddedDataset, season: str) -> np.ndarray:
+    """Absolute climatology of the season's months (falls back to the annual mean)."""
+    if ds.clim_monthly is None:
+        return ds.clim
+    _, months = season_spec(season)
+    return np.nanmean(ds.clim_monthly[[m - 1 for m in months]], axis=0)
+
+
+def _region_clim(ds: GriddedDataset, weights: np.ndarray, season: str = "annual") -> float | None:
+    clim = season_clim(ds, season)
+    ok = np.isfinite(clim) & (weights > 0)
     if not ok.any():
         return None
-    return float((ds.clim[ok] * weights[ok]).sum() / weights[ok].sum())
+    return float((clim[ok] * weights[ok]).sum() / weights[ok].sum())
 
 
 def _monthly_trends(ds: GriddedDataset, weights: np.ndarray, start_y: int, end_y: int) -> list[dict[str, Any]]:
@@ -761,7 +771,7 @@ def region_series(ds: GriddedDataset, regions: Sequence[Region], start: Any = No
         if stats_.get("trend") is not None and g and ds.kind == "temperature":
             stats_["vs_global"] = _num(stats_["trend"] / g, 2)
         if stats_.get("trend") is not None and ds.clim is not None:
-            clim = _region_clim(ds, weights)
+            clim = _region_clim(ds, weights, season)
             if clim and clim > 0.05:
                 stats_["clim"] = _num(clim, 3)
                 stats_["trend_rel"] = _num(stats_["trend"] / clim * 100, 2)

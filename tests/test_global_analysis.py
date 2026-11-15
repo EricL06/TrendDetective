@@ -243,6 +243,15 @@ class PrecipitationTest(unittest.TestCase):
         self.assertAlmostEqual(stats["trend_rel"], stats["trend"] / 2.0 * 100, delta=0.05)
         self.assertNotIn("vs_global", stats)
 
+    def test_relative_trend_uses_seasonal_climatology(self):
+        monthly = np.full((12,) + self.ds.values.shape[1:], 1.0, dtype=np.float32)
+        monthly[5:8] = 4.0  # wet summer: JJA climatology 4 mm/day
+        self.ds.clim_monthly = monthly
+        region = ga.parse_region({"point": [float(self.ds.lons[2]), float(self.ds.lats[3])]})
+        stats = ga.region_series(self.ds, [region], 1979, 2024, season="JJA")["regions"][0]["stats"]
+        self.assertAlmostEqual(stats["clim"], 4.0, places=3)
+        self.assertAlmostEqual(stats["trend_rel"], stats["trend"] / 4.0 * 100, delta=0.05)
+
     def test_baselines_are_per_dataset(self):
         with self.assertRaises(ga.AnalysisInputError):
             ga.layer(self.ds, "trend", 1979, 2024, baseline="1951-1980")

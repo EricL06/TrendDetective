@@ -65,6 +65,7 @@ class GriddedDataset:
     created: str = ""
     kind: str = "temperature"  # or "precipitation"
     clim: np.ndarray | None = None  # absolute annual-mean climatology (for relative trends)
+    clim_monthly: np.ndarray | None = None  # absolute climatology per calendar month (12, lat, lon)
     baselines: tuple[str, ...] = ("1951-1980", "1961-1990", "1981-2010", "1991-2020", "1880-1900")
     resolution: str = "2°"
     _annual_cache: dict = field(default_factory=dict, repr=False)
@@ -274,6 +275,7 @@ def load_gpcp(path: Path = GPCP_CACHE) -> GriddedDataset:
         values=anomalies.astype(np.float32),
         kind="precipitation",
         clim=np.nanmean(monthly_clim, axis=0).astype(np.float32),
+        clim_monthly=monthly_clim.astype(np.float32),
         baselines=("1991-2020", "1981-2010"),
         resolution="2,5°",
     )

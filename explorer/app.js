@@ -608,8 +608,8 @@ function updateLegend(scale) {
     const v = scale.min + (i / (n - 1)) * (scale.max - scale.min);
     const s = document.createElement("span");
     s.style.left = `${(i / (n - 1)) * 100}%`;
-    const digits = Math.abs(scale.max) < 1 ? 2 : 1;
-    s.textContent = charts.fmt(v, digits, scale.kind === "diverging");
+    const digits = Math.abs(scale.max) < 0.1 ? 3 : Math.abs(scale.max) < 1 ? 2 : 1;
+    s.textContent = charts.fmt(v, digits, scale.kind !== "sequential");
     if (i === 0) s.style.transform = "none";
     if (i === n - 1) { s.style.transform = "translateX(-100%)"; }
     ticks.appendChild(s);
@@ -620,7 +620,7 @@ function updateLegend(scale) {
     st.innerHTML = `<span>Globales Mittel</span><b>${charts.fmt(gm, 2)} ${unitOf()}</b>`;
   } else if (L) {
     const s = L.summary;
-    const rows = [[`Flächenmittel`, `${charts.fmt(s.area_mean, 2, L.kind !== "gradient")} ${L.unit}`]];
+    const rows = [[`Flächenmittel`, `${charts.fmt(s.area_mean, isTemp() || L.unit === "σ" || L.unit.startsWith("%") ? 2 : 3, L.kind !== "gradient")} ${L.unit}`]];
     if (s.significant_area != null) rows.push(["Signifikante Fläche", `${Math.round(s.significant_area * 100)} %`]);
     rows.push(["Datenabdeckung", `${Math.round((s.coverage || 0) * 100)} %`]);
     st.innerHTML = rows.map(([a, b]) => `<span>${a}</span><b>${b}</b>`).join("");
@@ -666,7 +666,7 @@ function onMapHover(e) {
     extra = state.sigMask[cell.k] ? " · <span class=muted>signifikant</span>" : " · <span class=muted>nicht signifikant</span>";
   }
   card.innerHTML = `<span class="muted">Zelle ${fmtLatLon(cell.lat, cell.lon)}</span><br>`
-    + (v === v ? `<b>${charts.fmt(v, 2, state.kind !== "gradient")} ${unit}</b>${extra}` : `<span class="muted">keine Daten</span>`);
+    + (v === v ? `<b>${charts.fmt(v, isTemp() || unit === "σ" || unit.startsWith("%") ? 2 : 3, state.kind !== "gradient")} ${unit}</b>${extra}` : `<span class="muted">keine Daten</span>`);
   card.hidden = false;
   const W = $("map").clientWidth;
   const x = e.point.x + 14 + card.offsetWidth > W ? e.point.x - card.offsetWidth - 14 : e.point.x + 14;
@@ -756,7 +756,7 @@ function setupDrawing() {
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && drawMode) { drawStart = null; setDrawMode(false); }
     // ← / → step through the years, space plays/pauses (not while typing in a field).
-    if (state.kind !== "year" || !state.frames || /INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName || "")) return;
+    if (state.kind !== "year" || !state.frames || /^(INPUT|SELECT|TEXTAREA|BUTTON|A)$/.test(document.activeElement?.tagName || "")) return;
     const [y0, y1] = [state.frames.years[0], state.frames.years[state.frames.years.length - 1]];
     if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       state.year = Math.max(y0, Math.min(y1, state.year + (e.key === "ArrowRight" ? 1 : -1)));
@@ -796,9 +796,10 @@ async function refreshLayer() {
   }
 }
 
+const framesKey = () => `${state.ds}|${state.season}|${state.baseline}`;
 const framesPending = new Map();
 async function loadFrames() {
-  const key = `${state.season}|${state.baseline}`;
+  const key = framesKey();
   if (state.frames?.key === key) return state.frames;
   if (framesPending.has(key)) return framesPending.get(key);
   const promise = fetchFrames(key);
@@ -822,7 +823,7 @@ async function fetchFrames(key) {
     for (let k = 0; k < data.length; k += 7) if (data[k] !== -32768) sample.push(Math.abs(data[k]) / 100);
     sample.sort((a, b) => a - b);
     const frames = { key, years, data, vmax: niceCeil(sample[Math.floor(sample.length * 0.99)] || 1) };
-    if (key === `${state.season}|${state.baseline}`) state.frames = frames;
+    if (key === framesKey()) state.frames = frames;
     return frames;
   } finally {
     loading(false);
@@ -832,7 +833,7 @@ async function fetchFrames(key) {
 async function showYearMode(req) {
   try {
     const f = await loadFrames();
-    if (req !== layerReq || state.kind !== "year" || f.key !== `${state.season}|${state.baseline}`) return;
+    if (req !== layerReq || state.kind !== "year" || f.key !== framesKey()) return;
     const slider = $("year-slider");
     slider.min = f.years[0];
     slider.max = f.years[f.years.length - 1];
@@ -1404,8 +1405,8 @@ async function renderDistribution(body, series, stale) {
     + d.periods.map((p, k) => `<tr><td><span style="color:${colors[Math.min(k, colors.length - 1)]}">■</span> ${p.period[0]}–${p.period[1]}</td><td>${charts.fmt(p.mean, 1)}σ</td><td>${pct(p.above2)}</td><td>${pct(p.above3)}</td></tr>`).join("")
     + `</tbody></table>`
     + `<p style="margin-top:8px">Jede Gitterzelle und jedes Jahr wird an der <b>eigenen</b> Jahr-zu-Jahr-Schwankung (σ) der Referenzperiode ${d.baseline[0]}–${d.baseline[1]} gemessen. In einem stabilen Klima läge nur ≈ 2 % der Fläche über 2σ und ≈ 0,1 % über 3σ.</p>`
-    + `<p>Rechtsverschiebung = was früher eine seltene Hitze-${d.season_label === "Jahr" ? "jahr" : "saison"} war, ist heute normal (nach Hansen et al. 2012, PNAS).</p>`
-    + `<p class="hint">${d.cells} Gitterzellen. Vorsicht beim Vergleich mit Stationsdaten: GISTEMP glättet über bis zu 1200 km, und über dem Meer schwankt die Temperatur wenig – beides macht σ klein und die Verschiebung in σ größer als an einer einzelnen Wetterstation. Am aussagekräftigsten ist der Sommer (JJA) über Land.</p>`;
+    + `<p>Rechtsverschiebung = was früher ein seltenes ${isTemp() ? "Hitze" : "Nass"}-${d.season_label === "Jahr" ? "jahr" : "saison"} war, ist heute ${isTemp() ? "normal" : "häufiger"}; Linksverschiebung = trockener (nach Hansen et al. 2012, PNAS).</p>`
+    + `<p class="hint">${d.cells} Gitterzellen. ${isTemp() ? "Vorsicht beim Vergleich mit Stationsdaten: GISTEMP glättet über bis zu 1200 km, und über dem Meer schwankt die Temperatur wenig – beides macht σ klein und die Verschiebung in σ größer als an einer einzelnen Wetterstation. Am aussagekräftigsten ist der Sommer (JJA) über Land." : "Niederschlag ist nicht normalverteilt (rechtsschief) – die σ-Skala ist hier eine grobe Orientierung."}</p>`;
 }
 
 const STAT_ROWS = [
@@ -1427,11 +1428,11 @@ const STAT_ROWS = [
   { group: "Niveau" },
   { key: "mean_last10", label: "Mittel letzte 10 Jahre", unit: "U", digits: 2 },
   { key: "clim", label: "Klimamittel 1991–2020 (absolut)", unit: "U", digits: 2, signed: false },
-  { key: "warmest", label: "Wärmste Jahre", list: true },
+  { key: "warmest", label: "W", list: true },
   { key: "noise_std", label: "Jahr-zu-Jahr-Schwankung (σ)", unit: "U", digits: 2, signed: false },
   { group: "Region" },
   { key: "_area", label: "Fläche", area: true },
-  { key: "_cells", label: "2°-Gitterzellen", cells: true },
+  { key: "_cells", label: "G", cells: true },
 ];
 
 function renderStats(body, series, d) {
@@ -1454,7 +1455,8 @@ function renderStats(body, series, d) {
   for (const row of STAT_ROWS) {
     if (row.key && !row.key.startsWith("_") && !row.group && ["trend_rel", "clim", "vs_global"].includes(row.key) && !present(row.key)) continue;
     if (row.group) { html += `<tr class="grp"><td colspan="${series.length + 1}">${row.group}</td></tr>`; continue; }
-    let label = row.label;
+    let label = row.label === "W" ? (isTemp() ? "Wärmste Jahre" : "Nasseste Jahre")
+      : row.label === "G" ? `${state.meta.dataset.resolution}-Gitterzellen` : row.label;
     if (row.halves != null) {
       const h = series[0]?.stats?.halves?.[row.halves];
       if (h) label += ` (${h[0]}–${h[1]})`;
@@ -1543,10 +1545,10 @@ function buildAbout() {
       <li><b>Trend</b>: lineare Regression (kleinste Quadrate) der Jahres- bzw. Jahreszeitenmittel. Konfidenzintervall und p-Wert sind für Autokorrelation erster Ordnung korrigiert (Santer et al. 2000). Eine Zelle bekommt nur einen Trend, wenn mindestens ⅔ der Jahre und jedes Drittel des Zeitraums Daten haben.</li>
       <li><b>Robuste Prüfung</b>: Theil-Sen-Steigung und Mann-Kendall-Test.</li>
       <li><b>Beschleunigung</b>: Trend der zweiten minus Trend der ersten Hälfte des Zeitraums – die „zweite Ableitung“ der Temperatur.</li>
-      <li><b>Signal/Rauschen &amp; Zeitpunkt des Hervortretens</b>: wie deutlich sich die Erwärmung von der natürlichen Jahr-zu-Jahr-Schwankung abhebt (Hawkins &amp; Sutton 2012).</li>
-      <li><b>Erwärmungstempo</b>: Trend der jeweils letzten 30 Jahre, für jedes Endjahr neu berechnet – zeigt, ob und wann sich die Erwärmung beschleunigt hat.</li>
+      <li><b>Signal/Rauschen &amp; Zeitpunkt des Hervortretens</b>: wie deutlich sich die Veränderung von der natürlichen Jahr-zu-Jahr-Schwankung abhebt (Hawkins &amp; Sutton 2012).</li>
+      <li><b>${isTemp() ? "Erwärmungstempo" : "Trendtempo"}</b>: Trend der jeweils letzten 30 Jahre, für jedes Endjahr neu berechnet – zeigt, ob und wann sich die Veränderung beschleunigt hat.</li>
       <li><b>Extreme</b>: Jede Zelle und jedes Jahr wird mit Mittel und Schwankung (σ) der Referenzperiode standardisiert; die Kurven zeigen, wie sich die Verteilung verschiebt und wie oft früher seltene (&gt; 2σ) oder extreme (&gt; 3σ) Werte heute auftreten (Hansen, Sato &amp; Ruedy 2012).</li>
-      <li><b>Räumlicher Gradient</b>: Betrag des räumlichen Gradienten des Trendfelds (zentrale Differenzen) in °C/Dekade pro 1000 km.</li>
+      <li><b>Räumlicher Gradient</b>: Betrag des räumlichen Gradienten des Trendfelds (zentrale Differenzen) in ${trendUnit()} pro 1000 km.</li>
       <li><b>Regionen</b>: flächengewichtetes Mittel (cos Breite × Anteil der Zelle in der Region). Jahre mit weniger als ⅓ Datenabdeckung der Region werden nicht gezeigt.</li>
       <li><b>Referenzperiode</b> verschiebt nur das Nullniveau der Anomalien, Trends bleiben gleich.</li>
     </ul>

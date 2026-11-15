@@ -151,6 +151,6 @@ def handle_get(handler: Any, path: str, query: str) -> bool:
         handler._send_json(200, route(ds, params))
     except ga.AnalysisInputError as exc:
         handler._send_json(400, {"error": str(exc)})
-    except OSError as exc:  # download of the dataset failed
+    except (OSError, ValueError, TypeError, KeyError) as exc:  # download or file broken
         handler._send_json(502, {"error": f"Datensatz nicht verfügbar: {exc}"})
     return True
