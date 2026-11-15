@@ -696,6 +696,32 @@ def split_by_variable(
     ]
 
 
+MIN_VARIABLE_SHARE: float = 0.05
+"""A secondary code with fewer values than this share of the largest one is hidden."""
+
+
+def drop_sparse_variables(
+    groups: list[tuple[str, list[dict[str, Any]]]],
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    """Leave out codes with only a handful of values next to a well-filled one.
+
+    Stations report occasional secondary codes (a multi-day snowfall total
+    MDSF once in 30 years next to 10,000 daily SNOW values). Each would get
+    a card with one or two points and no possible trend. A code is dropped
+    when it has fewer than 10 values *and* fewer than
+    :data:`MIN_VARIABLE_SHARE` of the values of the largest code.
+    """
+    if len(groups) <= 1:
+        return groups
+    largest = max(len(records) for _, records in groups)
+    kept = [
+        (key, records)
+        for key, records in groups
+        if len(records) >= 10 or len(records) >= MIN_VARIABLE_SHARE * largest
+    ]
+    return kept or groups
+
+
 PRECIPITATION_AMOUNT_CODES: frozenset[str] = frozenset({"prcp", "mdpr"})
 """Precipitation totals (mm) that are shown as a rate in ``mm/day``."""
 
@@ -1064,7 +1090,7 @@ def process_user_request(user_request: Any) -> dict[str, Any]:
         # Precipitation as a density (mm/day, % of days) so periods of any
         # length are comparable; DAPR day counts are folded into MDPR.
         topic_records = precipitation_as_density(topic_records)
-        for result_key, records in split_by_variable(topic, topic_records):
+        for result_key, records in drop_sparse_variables(split_by_variable(topic, topic_records)):
             station = _station_from_records(records, latitude, longitude)
             variables = sorted({str(r["description"]) for r in records if r.get("description")})
             units = {r.get("unit") for r in records}

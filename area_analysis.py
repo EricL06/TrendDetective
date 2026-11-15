@@ -608,7 +608,7 @@ def _evaluate_topic(
     # counts as % of days, DAPR day counts folded into MDPR.
     records = task.precipitation_as_density(records)
     evaluated = []
-    for result_key, variable_records in task.split_by_variable(topic_key, records):
+    for result_key, variable_records in task.drop_sparse_variables(task.split_by_variable(topic_key, records)):
         result, features = _evaluate_variable(
             region, result_key, variable_records, start_date, end_date, interval_length, tools
         )

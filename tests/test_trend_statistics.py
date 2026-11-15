@@ -167,3 +167,16 @@ class ServedFilesTest(unittest.TestCase):
             self.assertTrue(app._is_public_path(path), path)
         for path in ("/app.py", "/.git/config", "/static/../app.py", "/static/%2e%2e/app.py", "/data/cache/x"):
             self.assertFalse(app._is_public_path(path), path)
+
+
+class SparseVariablesTest(unittest.TestCase):
+    def test_a_handful_of_secondary_values_is_hidden(self) -> None:
+        main = [{"description": "snow", "value": 1.0}] * 300
+        rare = [{"description": "mdsf", "value": 5.0}] * 2
+        groups = task.split_by_variable("snowfall", main + rare)
+        kept = task.drop_sparse_variables(groups)
+        self.assertEqual([key for key, _ in kept], ["snowfall · snowfall (SNOW)"])
+
+    def test_balanced_variables_are_kept(self) -> None:
+        records = [{"description": c, "value": 1.0} for c in ("tmax", "tmin") for _ in range(8)]
+        self.assertEqual(len(task.drop_sparse_variables(task.split_by_variable("temperature", records))), 2)
