@@ -217,6 +217,41 @@ class LayerTest(unittest.TestCase):
         self.assertEqual(trends, sorted(trends, reverse=True))
 
 
+class PrecipitationTest(unittest.TestCase):
+    def setUp(self):
+        ga.clear_cache()
+        ds = make_dataset(first=1979, last_year=2024, slope_per_year=0.001, noise=0.05)
+        ds.kind = "precipitation"
+        ds.unit = "mm/Tag"
+        ds.baseline = (1991, 2020)
+        ds.baselines = ("1991-2020", "1981-2010")
+        ds.clim = np.full(ds.values.shape[1:], 2.0, dtype=np.float32)
+        ds.clim[0, 1] = 0.01  # a desert cell: no relative trend
+        self.ds = ds
+
+    def test_relative_trend_layer_and_stats(self):
+        info = ga.layer_info(self.ds)
+        self.assertIn("trend_rel", info)
+        self.assertEqual(info["trend"]["unit"], "mm/Tag/Dekade")
+        out = ga.layer(self.ds, "trend_rel", 1979, 2024)
+        trend = ga.layer(self.ds, "trend", 1979, 2024)
+        k = self.ds.lons.size * 3 + 2
+        self.assertAlmostEqual(out["values"][k], trend["values"][k] / 2.0 * 100, delta=0.05)
+        self.assertIsNone(out["values"][1])
+        region = ga.parse_region({"point": [float(self.ds.lons[2]), float(self.ds.lats[3])]})
+        stats = ga.region_series(self.ds, [region], 1979, 2024)["regions"][0]["stats"]
+        self.assertAlmostEqual(stats["trend_rel"], stats["trend"] / 2.0 * 100, delta=0.05)
+        self.assertNotIn("vs_global", stats)
+
+    def test_baselines_are_per_dataset(self):
+        with self.assertRaises(ga.AnalysisInputError):
+            ga.layer(self.ds, "trend", 1979, 2024, baseline="1951-1980")
+        ga.layer(self.ds, "anomaly", 1979, 2024, baseline="1981-2010")
+
+    def test_temperature_has_no_relative_layer(self):
+        self.assertNotIn("trend_rel", ga.layer_info(make_dataset()))
+
+
 class FakeHandler:
     def __init__(self):
         self.status = None
@@ -259,6 +294,7 @@ class ApiTest(unittest.TestCase):
         _, h = self.get("/api/global/meta")
         self.assertEqual(h.status, 200)
         self.assertGreater(len(h.body["presets"]), 10)
+        self.assertEqual({d["id"] for d in h.body["datasets"]}, {"gistemp", "gpcp"})
         _, h = self.get("/api/global/layer", "kind=snr&start=1950&end=1999")
         self.assertEqual(h.status, 200)
         _, h = self.get("/api/global/regions", "ids=global,arctic&start=1950&end=1999")
@@ -279,6 +315,7 @@ class ApiTest(unittest.TestCase):
             ("/api/global/regions", "custom={broken"),
             ("/api/global/zonal", "season=XYZ"),
             ("/api/global/layer", "baseline=1800-1830"),
+            ("/api/global/distribution", "region=nope"),
         ]:
             _, h = self.get(path, query)
             self.assertEqual(h.status, 400, (path, query, h.body))

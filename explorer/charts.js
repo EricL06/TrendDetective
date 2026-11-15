@@ -3,6 +3,10 @@ import { cssColor, niceCeil, SCALES, colorFor } from "./colormap.js";
 
 const NS = "http://www.w3.org/2000/svg";
 
+// Units and colour scale of the active dataset (set by the app via configure()).
+const CFG = { unit: "°C", trendUnit: "°C/Dekade", trendShort: "°C/Dek.", digits: 2, scale: "diverging", trendTitle: "Erwärmungstrend" };
+export function configure(opts) { Object.assign(CFG, opts); }
+
 export function fmt(v, digits = 2, signed = true) {
   if (v == null || !Number.isFinite(v)) return "–";
   const s = v.toFixed(digits).replace(".", ",").replace("-", "−");
@@ -70,7 +74,7 @@ function frame(container, margin) {
  * Anomaly time series: thin annual line, bold 11-yr running mean, dashed OLS trend over the period.
  * series: [{name, color, values[], running[], coverage[], stats}]
  */
-export function timeSeries(container, { years, series, period, unit = "°C", baselineLabel }) {
+export function timeSeries(container, { years, series, period, unit = CFG.unit, baselineLabel }) {
   container.innerHTML = "";
   const wrap = document.createElement("div");
   wrap.className = "series-wrap";
@@ -149,7 +153,7 @@ export function timeSeries(container, { years, series, period, unit = "°C", bas
     const t = el("text", { class: "label", x: W - m.r + 8, y: l.y + 3 }, svg);
     t.textContent = truncate(l.name, 15);
     const t2 = el("text", { class: "axis", x: W - m.r + 8, y: l.y + 15 }, svg);
-    t2.textContent = l.trend != null ? `${fmt(l.trend, 2)} °C/Dek.` : "";
+    t2.textContent = l.trend != null ? `${fmt(l.trend, CFG.digits)} ${CFG.trendShort}` : "";
     el("line", { x1: l.x + 2, x2: W - m.r + 4, y1: l.y, y2: l.y, stroke: l.color, "stroke-width": 1, "stroke-opacity": 0.4 }, svg);
   }
 
@@ -173,7 +177,7 @@ export function timeSeries(container, { years, series, period, unit = "°C", bas
       if (v == null) { dot.setAttribute("visibility", "hidden"); }
       else { dot.setAttribute("cx", X(years[i])); dot.setAttribute("cy", Y(v)); dot.setAttribute("visibility", "visible"); }
       const cov = s.coverage?.[i];
-      rows += `<div class="t-row"><i style="background:${s.color}"></i><span>${escapeHtml(truncate(s.name, 22))}</span><b>${fmt(v, 2)} °C</b></div>`;
+      rows += `<div class="t-row"><i style="background:${s.color}"></i><span>${escapeHtml(truncate(s.name, 22))}</span><b>${fmt(v, 2)} ${CFG.unit}</b></div>`;
       if (s.running[i] != null) rows += `<div class="t-row"><i></i><span class="muted">11-J.-Mittel</span><span class="muted">${fmt(s.running[i], 2)}</span></div>`;
       if (cov != null && cov < 0.9) rows += `<div class="t-row"><i></i><span class="muted">Flächenabdeckung</span><span class="muted">${Math.round(cov * 100)} %</span></div>`;
     });
@@ -197,7 +201,7 @@ export function stripes(container, { years, series }) {
   const iw = W - m.l - m.r;
   let maxAbs = 0;
   for (const s of series) for (const v of s.values) if (v != null) maxAbs = Math.max(maxAbs, Math.abs(v));
-  const scale = { kind: "diverging", min: -niceCeil(maxAbs * 0.85), max: niceCeil(maxAbs * 0.85) };
+  const scale = { kind: CFG.scale, min: -niceCeil(maxAbs * 0.85), max: niceCeil(maxAbs * 0.85) };
   const bw = iw / years.length;
   const tip = makeTip(host);
   series.forEach((s, r) => {
@@ -214,7 +218,7 @@ export function stripes(container, { years, series }) {
       const rect = svg.getBoundingClientRect();
       const px = ((ev.clientX - rect.left) / rect.width) * W;
       const i = Math.max(0, Math.min(years.length - 1, Math.floor((px - m.l) / bw)));
-      tip.show(`<div class="t-head">${escapeHtml(s.name)} · ${years[i]}</div><b>${fmt(s.values[i], 2)} °C</b>`,
+      tip.show(`<div class="t-head">${escapeHtml(s.name)} · ${years[i]}</div><b>${fmt(s.values[i], 2)} ${CFG.unit}</b>`,
         ev.clientX - rect.left, ev.clientY - rect.top);
     });
     hit.addEventListener("mouseleave", () => tip.hide());
@@ -255,7 +259,7 @@ export function seasons(container, { series }) {
   }
   el("line", { class: "zero", x1: m.l, x2: W - m.r, y1: Y(0), y2: Y(0) }, svg);
   const yt = el("text", { class: "axis-title", x: 12, y: m.t + ih / 2, transform: `rotate(-90 12 ${m.t + ih / 2})`, "text-anchor": "middle" }, svg);
-  yt.textContent = "Trend (°C/Dekade)";
+  yt.textContent = `Trend (${CFG.trendUnit})`;
   const gw = iw / 12;
   const n = series.length;
   const bw = Math.max(2, Math.min(22, (gw - 8) / n - 2));
@@ -279,10 +283,10 @@ export function seasons(container, { series }) {
       const rect = svg.getBoundingClientRect();
       const rows = series.map((s) => {
         const mt = s.monthly[k];
-        return `<div class="t-row"><i style="background:${s.color}"></i><span>${escapeHtml(truncate(s.name, 20))}</span><b>${fmt(mt.trend, 2)} ± ${fmt(mt.ci, 2, false)}</b></div>`
+        return `<div class="t-row"><i style="background:${s.color}"></i><span>${escapeHtml(truncate(s.name, 20))}</span><b>${fmt(mt.trend, CFG.digits)} ± ${fmt(mt.ci, CFG.digits, false)}</b></div>`
           + `<div class="t-row"><i></i><span class="muted">p</span><span class="muted">${fmtP(mt.p)}</span></div>`;
       }).join("");
-      tip.show(`<div class="t-head">${name} · °C/Dekade</div>${rows}`, ev.clientX - rect.left, ev.clientY - rect.top);
+      tip.show(`<div class="t-head">${name} · ${CFG.trendUnit}</div>${rows}`, ev.clientX - rect.left, ev.clientY - rect.top);
     });
     hit.addEventListener("mouseleave", () => tip.hide());
   });
@@ -310,8 +314,8 @@ export function ranking(container, { rows, global, selectedIds, colors, onPick }
     el("line", { x1: X(t), x2: X(t), y1: m.t - 4, y2: H - m.b }, grid);
     el("text", { x: X(t), y: H - 6, "text-anchor": "middle" }, axis).textContent = fmt(t, 2, false);
   }
-  el("text", { class: "axis-title", x: 4, y: 10 }, svg).textContent = "Erwärmungstrend in °C/Dekade · Strich = 95-%-Konfidenz · blass = nicht signifikant · ×n = Vielfaches des globalen Trends";
-  const scale = { kind: "diverging", min: -niceCeil(Math.max(Math.abs(lo), Math.abs(hi))), max: niceCeil(Math.max(Math.abs(lo), Math.abs(hi))) };
+  el("text", { class: "axis-title", x: 4, y: 10 }, svg).textContent = `${CFG.trendTitle} in ${CFG.trendUnit} · Strich = 95-%-Konfidenz · blass = nicht signifikant · ${CFG.scale === "diverging" ? "×n = Vielfaches des globalen Trends" : "% = relativ zum Klimamittel"}`;
+  const scale = { kind: CFG.scale, min: -niceCeil(Math.max(Math.abs(lo), Math.abs(hi))), max: niceCeil(Math.max(Math.abs(lo), Math.abs(hi))) };
   const tip = makeTip(host);
   valid.forEach((r, i) => {
     const y = m.t + i * rowH;
@@ -325,16 +329,17 @@ export function ranking(container, { rows, global, selectedIds, colors, onPick }
     el("rect", { x: Math.min(x0, x1), y: y + 4, width: Math.max(1, Math.abs(x1 - x0)), height: rowH - 8, rx: 3, fill: cssColor(r.trend, scale), "fill-opacity": r.trend_p != null && r.trend_p < 0.05 ? 1 : 0.45 }, g);
     if (r.trend_ci != null) el("line", { x1: X(r.trend - r.trend_ci), x2: X(r.trend + r.trend_ci), y1: y + rowH / 2, y2: y + rowH / 2, stroke: "#e8edf4", "stroke-width": 1.2, "stroke-opacity": 0.75 }, g);
     const val = el("text", { x: W - m.r + 8, y: y + rowH / 2 + 4, "font-size": 11, fill: "#a9b6c7" }, g);
-    val.textContent = `${fmt(r.trend, 2)}  ${r.vs_global != null ? "×" + r.vs_global.toFixed(1).replace(".", ",") : ""}`;
+    val.textContent = `${fmt(r.trend, CFG.digits)}  ${r.vs_global != null ? "×" + r.vs_global.toFixed(1).replace(".", ",") : r.trend_rel != null ? fmt(r.trend_rel, 1) + " %" : ""}`;
     el("rect", { x: 0, y, width: W, height: rowH, fill: "transparent" }, g);
     g.addEventListener("click", () => onPick?.(r.id));
     g.addEventListener("mousemove", (ev) => {
       const rect = svg.getBoundingClientRect();
       tip.show(`<div class="t-head">${escapeHtml(r.name)}</div>`
-        + `Trend <b>${fmt(r.trend, 3)} ± ${fmt(r.trend_ci, 3, false)}</b> °C/Dek.<br>`
+        + `Trend <b>${fmt(r.trend, 3)} ± ${fmt(r.trend_ci, 3, false)}</b> ${CFG.trendShort}<br>`
+        + (r.trend_rel != null ? `relativ <b>${fmt(r.trend_rel, 1)} %</b> pro Dekade<br>` : "")
         + `p = ${fmtP(r.trend_p)} · ${r.vs_global != null ? "×" + r.vs_global.toFixed(2).replace(".", ",") + " global" : ""}<br>`
-        + `Änderung im Zeitraum <b>${fmt(r.change, 2)} °C</b><br>`
-        + `Beschleunigung ${fmt(r.acceleration, 2)} °C/Dek.<br>`
+        + `Änderung im Zeitraum <b>${fmt(r.change, 2)} ${CFG.unit}</b><br>`
+        + `Beschleunigung ${fmt(r.acceleration, CFG.digits)} ${CFG.trendShort}<br>`
         + `<span class="muted">${sel ? "Klick: aus Vergleich entfernen" : "Klick: zum Vergleich hinzufügen"}</span>`,
         ev.clientX - rect.left, ev.clientY - rect.top);
     });
@@ -361,7 +366,9 @@ export function hovmoller(container, { years, lats, values, period, highlight })
   cv.width = ny; cv.height = nl;
   const ctx = cv.getContext("2d");
   const img = ctx.createImageData(ny, nl);
-  const scale = { kind: "diverging", min: -3, max: 3 };
+  const absVals = values.filter((v) => v != null).map(Math.abs).sort((a, b) => a - b);
+  const vmax = niceCeil(absVals[Math.floor(absVals.length * 0.98)] || 1);
+  const scale = { kind: CFG.scale, min: -vmax, max: vmax };
   for (let i = 0; i < ny; i++) for (let j = 0; j < nl; j++) {
     const v = values[i * nl + j];
     const p = ((nl - 1 - j) * ny + i) * 4;
@@ -397,8 +404,8 @@ export function hovmoller(container, { years, lats, values, period, highlight })
     const v = scale.max - (k / steps) * (scale.max - scale.min);
     el("rect", { x: cbX, y: m.t + (k / steps) * ih, width: 10, height: ih / steps + 0.5, fill: cssColor(v, scale) }, svg);
   }
-  for (const t of [-3, -2, -1, 0, 1, 2, 3]) {
-    el("text", { x: cbX + 14, y: m.t + ((scale.max - t) / (scale.max - scale.min)) * ih + 3.5 }, axis).textContent = fmt(t, 0);
+  for (const t of ticks(scale.min, scale.max, 6)) {
+    el("text", { x: cbX + 14, y: m.t + ((scale.max - t) / (scale.max - scale.min)) * ih + 3.5 }, axis).textContent = fmt(t, vmax < 2 ? 1 : 0);
   }
   const tip = makeTip(host);
   const hit = el("rect", { x: m.l, y: m.t, width: iw, height: ih, fill: "transparent" }, svg);
@@ -410,7 +417,7 @@ export function hovmoller(container, { years, lats, values, period, highlight })
     const lat = 90 - ((py - m.t) / ih) * 180;
     const j = Math.max(0, Math.min(nl - 1, Math.round((lat - lats[0]) / (lats[1] - lats[0]))));
     const v = values[i * nl + j];
-    tip.show(`<div class="t-head">${years[i]} · ${Math.abs(lats[j])}°${lats[j] >= 0 ? "N" : "S"}</div>Zonalmittel <b>${fmt(v, 2)} °C</b>`,
+    tip.show(`<div class="t-head">${years[i]} · ${Math.abs(lats[j])}°${lats[j] >= 0 ? "N" : "S"}</div>Zonalmittel <b>${fmt(v, 2)} ${CFG.unit}</b>`,
       ev.clientX - rect.left, ev.clientY - rect.top);
   });
   hit.addEventListener("mouseleave", () => tip.hide());
@@ -485,7 +492,7 @@ export function rollingTrend(container, { years, series, window, global }) {
   for (const t of ticks(x0, x1, Math.max(4, Math.round(iw / 90)))) el("text", { x: X(t), y: H - 8, "text-anchor": "middle" }, axis).textContent = t;
   el("line", { class: "zero", x1: m.l, x2: W - m.r, y1: Y(0), y2: Y(0) }, svg);
   const yt = el("text", { class: "axis-title", x: 12, y: m.t + ih / 2, transform: `rotate(-90 12 ${m.t + ih / 2})`, "text-anchor": "middle" }, svg);
-  yt.textContent = `${window}-Jahres-Trend (°C/Dekade)`;
+  yt.textContent = `${window}-Jahres-Trend (${CFG.trendUnit})`;
   const pathOf = (vals) => {
     let d = "", pen = false;
     vals.forEach((v, i) => { if (v == null || i < first) { pen = false; return; } d += `${pen ? "L" : "M"}${X(years[i]).toFixed(1)},${Y(v).toFixed(1)}`; pen = true; });
@@ -515,7 +522,7 @@ export function rollingTrend(container, { years, series, window, global }) {
   for (let i = 1; i < labels.length; i++) if (labels[i].y - labels[i - 1].y < 26) labels[i].y = labels[i - 1].y + 26;
   for (const l of labels) {
     el("text", { class: "label", x: W - m.r + 8, y: l.y + 3 }, svg).textContent = truncate(l.name, 15);
-    el("text", { class: "axis", x: W - m.r + 8, y: l.y + 15 }, svg).textContent = `${fmt(l.v, 2)} °C/Dek.`;
+    el("text", { class: "axis", x: W - m.r + 8, y: l.y + 15 }, svg).textContent = `${fmt(l.v, CFG.digits)} ${CFG.trendShort}`;
   }
   const cross = el("line", { class: "crosshair", y1: m.t, y2: m.t + ih, visibility: "hidden" }, svg);
   const tip = makeTip(host);
@@ -528,7 +535,7 @@ export function rollingTrend(container, { years, series, window, global }) {
     if (i < 0) return;
     cross.setAttribute("x1", X(years[i])); cross.setAttribute("x2", X(years[i])); cross.setAttribute("visibility", "visible");
     const rows = series.map((s) => `<div class="t-row"><i style="background:${s.color}"></i><span>${escapeHtml(truncate(s.name, 22))}</span><b>${fmt(s.rolling[i], 2)} ± ${fmt(s.rollingCi[i], 2, false)}</b></div>`).join("");
-    tip.show(`<div class="t-head">${years[i] - window + 1}–${years[i]} · °C/Dekade</div>${rows}`, (X(years[i]) / W) * rect.width, ev.clientY - rect.top);
+    tip.show(`<div class="t-head">${years[i] - window + 1}–${years[i]} · ${CFG.trendUnit}</div>${rows}`, (X(years[i]) / W) * rect.width, ev.clientY - rect.top);
   });
   hit.addEventListener("mouseleave", () => { tip.hide(); cross.setAttribute("visibility", "hidden"); });
 }

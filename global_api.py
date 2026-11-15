@@ -65,10 +65,12 @@ def _period(params: dict[str, list[str]]) -> dict[str, Any]:
 def _meta(ds: gd.GriddedDataset, params: dict[str, list[str]]) -> dict[str, Any]:
     return {
         "dataset": ds.meta(),
+        "datasets": [{"id": k, "label": v["label"]} for k, v in gd.DATASETS.items()],
         "seasons": [{"id": k, "label": v[0]} for k, v in ga.SEASONS.items()]
         + [{"id": f"m{i + 1:02d}", "label": name} for i, name in enumerate(ga.MONTH_NAMES)],
-        "baselines": [{"id": k, "label": f"{a}–{b}"} for k, (a, b) in ga.BASELINES.items()],
-        "layers": [{"id": k, **v} for k, v in ga.LAYERS.items()],
+        "baselines": [{"id": k, "label": f"{a}–{b}"} for k, (a, b) in ga.BASELINES.items()
+                      if k in ds.baselines or ds.key not in gd.DATASETS],
+        "layers": [{"id": k, **v} for k, v in ga.layer_info(ds).items()],
         "presets": [r.to_dict() for r in ga.PRESET_REGIONS],
     }
 
@@ -127,7 +129,11 @@ def handle_get(handler: Any, path: str, query: str) -> bool:
     params = parse_qs(query)
     _reload_if_changed()
     try:
-        ds = gd.get_dataset()
+        key = _q(params, "ds", "gistemp")
+        try:
+            ds = gd.get_dataset(key)
+        except KeyError:
+            raise ga.AnalysisInputError(f"Unbekannter Datensatz: {key}") from None
         if name == "frames":
             years, payload = ga.frames(ds, **_common(params))
             handler.send_response(200)

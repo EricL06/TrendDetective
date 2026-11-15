@@ -16,18 +16,19 @@ const FALLBACK_STYLE = {
 };
 
 const LAYER_UI = [
-  { id: "trend", short: "Trend", hint: "Lineare Erwärmungsrate je Gitterzelle (°C pro Dekade). Punkte = Trend nicht signifikant (p ≥ 0,05, autokorrelationskorrigiert)." },
-  { id: "anomaly", short: "Anomalie", hint: "Mittlere Abweichung im gewählten Zeitraum gegenüber der Referenzperiode." },
-  { id: "year", short: "Einzeljahr ▶", hint: "Anomalie jedes einzelnen Jahres – mit ▶ als Animation über alle Jahre." },
-  { id: "acceleration", short: "Beschleunigung", hint: "Trend der zweiten minus Trend der ersten Hälfte des Zeitraums. Rot = Erwärmung wird schneller. Punkte = Unterschied nicht signifikant." },
-  { id: "snr", short: "Signal/Rauschen", hint: "Lineare Änderung im Zeitraum geteilt durch die natürliche Jahr-zu-Jahr-Schwankung. Ab ≈ 2 hebt sich der Trend deutlich vom Rauschen ab." },
-  { id: "gradient", short: "Räuml. Gradient", hint: "Wie stark sich der Erwärmungstrend zwischen Nachbarregionen ändert (°C/Dekade pro 1000 km) – zeigt Grenzen wie Meereis- oder Küstenkanten." },
+  { id: "trend", short: "Trend", hint: (w) => `Lineare ${w ? "Erwärmungsrate" : "Änderung des Niederschlags"} je Gitterzelle (${trendUnit()}). Punkte = Trend nicht signifikant (p ≥ 0,05, autokorrelationskorrigiert).` },
+  { id: "trend_rel", short: "Rel. Trend", hint: () => "Niederschlagstrend relativ zum Klimamittel 1991–2020 (% pro Dekade) – vergleicht trockene und feuchte Gebiete fair. Zellen mit < 0,1 mm/Tag bleiben leer." },
+  { id: "anomaly", short: "Anomalie", hint: () => "Mittlere Abweichung im gewählten Zeitraum gegenüber der Referenzperiode." },
+  { id: "year", short: "Einzeljahr ▶", hint: () => "Anomalie jedes einzelnen Jahres – mit ▶ als Animation über alle Jahre." },
+  { id: "acceleration", short: "Beschleunigung", hint: (w) => `Trend der zweiten minus Trend der ersten Hälfte des Zeitraums. ${w ? "Rot = Erwärmung wird schneller." : "Grün = wird schneller feuchter, braun = schneller trockener."} Punkte = Unterschied nicht signifikant.` },
+  { id: "snr", short: "Signal/Rauschen", hint: () => "Lineare Änderung im Zeitraum geteilt durch die natürliche Jahr-zu-Jahr-Schwankung. Ab ≈ 2 hebt sich der Trend deutlich vom Rauschen ab." },
+  { id: "gradient", short: "Räuml. Gradient", hint: () => `Wie stark sich der Trend zwischen Nachbarregionen ändert (${trendUnit()} pro 1000 km) – zeigt Grenzen wie Meereis- oder Küstenkanten.` },
 ];
 
 const PERIOD_PRESETS = [
   { label: "1880–heute", start: 1880 },
   { label: "1951–heute", start: 1951 },
-  { label: "1975–heute", start: 1975 },
+  { label: "1979–heute", start: 1979, title: "Satellitenära – Standardzeitraum vieler Studien" },
   { label: "Letzte 30 J.", recent: 30 },
 ];
 
@@ -37,8 +38,9 @@ const DEFAULT_REGIONS = [{ preset: "mediterranean" }, { preset: "antarctica" }, 
 const $ = (id) => document.getElementById(id);
 const state = {
   meta: null,
+  ds: "gistemp",
   kind: "trend",
-  start: 1975,
+  start: 1979,
   end: null,
   season: "annual",
   baseline: "1951-1980",
@@ -105,7 +107,26 @@ function lastFullYear() {
 }
 
 function commonParams() {
-  return { season: state.season, baseline: state.baseline };
+  return { ds: state.ds, season: state.season, baseline: state.baseline };
+}
+
+const isTemp = () => state.meta?.dataset.kind !== "precipitation";
+const unitOf = () => state.meta?.dataset.unit || "°C";
+const trendUnit = () => `${unitOf()}/Dekade`;
+const trendShort = () => `${unitOf()}/Dek.`;
+const trendDigits = () => (isTemp() ? 2 : 3);
+const scaleKind = () => (isTemp() ? "diverging" : "drywet");
+
+function configureCharts() {
+  charts.configure({
+    unit: unitOf(), trendUnit: trendUnit(), trendShort: trendShort(), digits: trendDigits(),
+    scale: scaleKind(), trendTitle: isTemp() ? "Erwärmungstrend" : "Niederschlagstrend",
+  });
+  const tabs = { tempo: isTemp() ? "Erwärmungstempo" : "Trendtempo", stripes: isTemp() ? "Wärmestreifen" : "Niederschlagsstreifen" };
+  for (const [tab, label] of Object.entries(tabs)) document.querySelector(`#tabs [data-tab=${tab}]`).textContent = label;
+  for (const b of $("ds-seg").querySelectorAll("button")) b.setAttribute("aria-checked", String(b.dataset.ds === state.ds));
+  const ds = state.meta.dataset;
+  $("dataset-line").textContent = `${ds.name} · ${ds.resolution}-Gitter · ${ds.first[0]}–${String(ds.last[1]).padStart(2, "0")}/${ds.last[0]} · monatlich`;
 }
 
 function periodParams() {
@@ -126,6 +147,7 @@ function seasonLabel() {
 
 function writeHash() {
   const p = new URLSearchParams();
+  if (state.ds !== "gistemp") p.set("d", state.ds);
   p.set("k", state.kind);
   p.set("p", `${state.start}-${state.end}`);
   p.set("s", state.season);
@@ -139,7 +161,7 @@ function writeHash() {
 function readHash() {
   const p = new URLSearchParams(location.hash.slice(1));
   if (!p.toString()) return false;
-  if (LAYER_UI.some((l) => l.id === p.get("k"))) state.kind = p.get("k");
+  if (state.meta.layers.some((l) => l.id === p.get("k")) || p.get("k") === "year") state.kind = p.get("k");
   const per = (p.get("p") || "").split("-").map(Number);
   if (per.length === 2 && per.every(Number.isFinite)) [state.start, state.end] = per;
   // Only accept values the dataset offers, so a broken link falls back to defaults.
@@ -166,9 +188,15 @@ function readHash() {
 // Controls
 
 function buildControls() {
+  populateControls();
+  buildListeners();
+}
+
+function populateControls() {
   const seg = $("layer-seg");
   seg.innerHTML = "";
-  for (const l of LAYER_UI) {
+  const available = new Set(state.meta.layers.map((l) => l.id).concat(["year"]));
+  for (const l of LAYER_UI.filter((x) => available.has(x.id))) {
     const b = document.createElement("button");
     b.type = "button";
     b.role = "radio";
@@ -196,11 +224,14 @@ function buildControls() {
   }
   const pp = $("period-presets");
   pp.innerHTML = "";
-  for (const p of PERIOD_PRESETS) {
+  for (const p of PERIOD_PRESETS.filter((x) => x.recent || x.start >= state.meta.dataset.first[0])) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "chip";
     b.textContent = p.label;
+    b.title = p.title || "";
+    b.dataset.start = p.start ?? "";
+    b.dataset.recent = p.recent ?? "";
     b.addEventListener("click", () => {
       const end = lastFullYear();
       setPeriod(p.recent ? end - p.recent + 1 : p.start, end);
@@ -212,7 +243,10 @@ function buildControls() {
     $(id).min = first;
     $(id).max = state.meta.dataset.last[0];
   }
+}
 
+function buildListeners() {
+  for (const b of $("ds-seg").querySelectorAll("button")) b.addEventListener("click", () => switchDataset(b.dataset.ds));
   $("start-year").addEventListener("change", (e) => setPeriod(Number(e.target.value), state.end));
   $("end-year").addEventListener("change", (e) => setPeriod(state.start, Number(e.target.value)));
   season.addEventListener("change", (e) => {
@@ -272,21 +306,51 @@ function buildControls() {
 
 function syncControls() {
   for (const b of $("layer-seg").querySelectorAll("button")) b.setAttribute("aria-checked", String(b.dataset.kind === state.kind));
-  $("layer-hint").textContent = LAYER_UI.find((l) => l.id === state.kind)?.hint || "";
+  $("layer-hint").textContent = LAYER_UI.find((l) => l.id === state.kind)?.hint(isTemp()) || "";
   $("start-year").value = state.start;
   $("end-year").value = state.end;
   $("season").value = state.season;
   $("baseline").value = state.baseline;
   $("timeline").hidden = state.kind !== "year";
   const end = lastFullYear();
-  for (const [i, b] of [...$("period-presets").children].entries()) {
-    const p = PERIOD_PRESETS[i];
-    const start = p.recent ? end - p.recent + 1 : p.start;
+  for (const b of $("period-presets").children) {
+    const start = b.dataset.recent ? end - Number(b.dataset.recent) + 1 : Number(b.dataset.start);
     b.classList.toggle("active", state.start === start && state.end === end);
   }
   for (const b of $("tabs").querySelectorAll("button")) b.setAttribute("aria-selected", String(b.dataset.tab === state.tab));
   // the period inputs are irrelevant for the single-year view
   document.querySelectorAll("#start-year,#end-year").forEach((e) => (e.disabled = false));
+}
+
+async function switchDataset(key) {
+  if (key === state.ds) return;
+  if (state.playing) togglePlay();
+  let meta;
+  try {
+    loading(true, "Lade Datensatz …");
+    meta = await getJSON("meta", { ds: key });
+  } catch (err) {
+    toast(err.message);
+    return;
+  } finally {
+    loading(false);
+  }
+  state.ds = key;
+  state.meta = meta;
+  state.baseline = `${meta.dataset.baseline[0]}-${meta.dataset.baseline[1]}`;
+  if (!meta.layers.some((l) => l.id === state.kind) && state.kind !== "year") state.kind = "trend";
+  state.frames = null;
+  state.scaleMax = null;
+  $("scale-max").value = "";
+  const first = meta.dataset.first[0];
+  state.end = Math.min(state.end, lastFullYear());
+  state.start = Math.max(state.start, first);
+  if (state.end - state.start < 9) state.start = Math.max(first, state.end - 29);
+  populateControls();
+  configureCharts();
+  buildAbout();
+  syncControls();
+  refreshAll();
 }
 
 function setKind(kind) {
@@ -323,7 +387,7 @@ function initMap() {
     zoom: initialZoom(),
     minZoom: 0.6,
     maxZoom: 7,
-    attributionControl: { compact: true, customAttribution: "Daten: NASA GISTEMP v4" },
+    attributionControl: { compact: true, customAttribution: "Daten: NASA GISTEMP v4 · GPCP v2.3 (NOAA PSL) · Natural Earth" },
     renderWorldCopies: true,
     boxZoom: false,
   });
@@ -475,17 +539,17 @@ function updateCaps(scale) {
 function currentScale() {
   const L = state.layer;
   if (state.kind === "year") {
-    const m = state.scaleMax || 4;
-    return { kind: "diverging", min: -m, max: m };
+    const m = state.scaleMax || state.frames?.vmax || 4;
+    return { kind: scaleKind(), min: -m, max: m };
   }
-  if (!L) return { kind: "diverging", min: -1, max: 1 };
+  if (!L) return { kind: scaleKind(), min: -1, max: 1 };
   if (L.kind === "gradient") {
     const m = state.scaleMax || niceCeil(absPercentile(state.grid, 0.97) || 1);
     return { kind: "sequential", min: 0, max: m };
   }
   const auto = niceCeil(absPercentile(state.grid, 0.95) || 1);
   const m = state.scaleMax || auto;
-  return { kind: "diverging", min: -m, max: m };
+  return { kind: scaleKind(), min: -m, max: m };
 }
 
 function absPercentile(grid, q) {
@@ -525,7 +589,7 @@ function redrawOverlay() {
 
 function updateLegend(scale) {
   const L = state.layer;
-  const unit = state.kind === "year" ? "°C" : L?.unit || "";
+  const unit = state.kind === "year" ? unitOf() : L?.unit || "";
   let title;
   if (state.kind === "year") title = `Anomalie ${state.year} (${seasonLabel()}) ggü. ${baselineLabel()}`;
   else title = `${L?.label || ""} · ${seasonLabel()} · ${L?.period?.[0]}–${L?.period?.[1]}`;
@@ -547,7 +611,7 @@ function updateLegend(scale) {
   const st = $("legend-stats");
   if (state.kind === "year") {
     const gm = globalMean(state.grid);
-    st.innerHTML = `<span>Globales Mittel</span><b>${charts.fmt(gm, 2)} °C</b>`;
+    st.innerHTML = `<span>Globales Mittel</span><b>${charts.fmt(gm, 2)} ${unitOf()}</b>`;
   } else if (L) {
     const s = L.summary;
     const rows = [[`Flächenmittel`, `${charts.fmt(s.area_mean, 2, L.kind !== "gradient")} ${L.unit}`]];
@@ -590,7 +654,7 @@ function onMapHover(e) {
   const cell = cellIndex(e.lngLat.lng, e.lngLat.lat);
   if (!cell) { card.hidden = true; return; }
   const v = state.grid[cell.k];
-  const unit = state.kind === "year" ? "°C" : state.layer?.unit || "";
+  const unit = state.kind === "year" ? unitOf() : state.layer?.unit || "";
   let extra = "";
   if (state.sigMask && v === v && state.kind !== "anomaly" && state.kind !== "year" && state.kind !== "gradient") {
     extra = state.sigMask[cell.k] ? " · <span class=muted>signifikant</span>" : " · <span class=muted>nicht signifikant</span>";
@@ -621,11 +685,12 @@ async function onMapClick(e) {
     const spark = charts.sparkline(data.years, r.values, r.running, { color: "#ef8a62" });
     const html = `<div class="cell-pop"><h4>Gitterzelle ${fmtLatLon(cell.lat, cell.lon)}</h4>`
       + (s.trend != null
-        ? `<div class="big">${charts.fmt(s.trend, 2)} <small>°C/Dekade</small></div>`
+        ? `<div class="big">${charts.fmt(s.trend, trendDigits())} <small>${trendUnit()}</small></div>`
+          + (s.trend_rel != null ? `<div class="row"><span>relativ zum Klimamittel</span><b>${charts.fmt(s.trend_rel, 1)} %/Dek.</b></div>` : "")
           + `<div class="row"><span>${data.period[0]}–${data.period[1]}, ${data.season_label}</span><span>p ${charts.fmtP(s.trend_p)}</span></div>`
         : `<div class="muted">${s.error || "Keine Daten"}</div>`)
       + spark
-      + (s.change != null ? `<div class="row"><span>Änderung im Zeitraum</span><b>${charts.fmt(s.change, 2)} °C</b></div>` : "")
+      + (s.change != null ? `<div class="row"><span>Änderung im Zeitraum</span><b>${charts.fmt(s.change, 2)} ${unitOf()}</b></div>` : "")
       + (s.vs_global != null ? `<div class="row"><span>× globaler Trend</span><b>${s.vs_global.toFixed(2).replace(".", ",")}</b></div>` : "")
       + (s.emergence_year ? `<div class="row"><span>Signal tritt hervor ab</span><b>${s.emergence_year}</b></div>` : "")
       + `<button class="primary" type="button" id="pop-add">+ Zum Vergleich</button></div>`;
@@ -732,7 +797,12 @@ async function fetchFrames(key) {
     const buf = await res.arrayBuffer();
     const years = [];
     for (let y = y0; y <= y1; y++) years.push(y);
-    const frames = { key, years, data: new Int16Array(buf) };
+    const data = new Int16Array(buf);
+    // Colour range for the animation: 99th percentile of |anomaly| over a sample of all years.
+    const sample = [];
+    for (let k = 0; k < data.length; k += 7) if (data[k] !== -32768) sample.push(Math.abs(data[k]) / 100);
+    sample.sort((a, b) => a - b);
+    const frames = { key, years, data, vmax: niceCeil(sample[Math.floor(sample.length * 0.99)] || 1) };
     if (key === `${state.season}|${state.baseline}`) state.frames = frames;
     return frames;
   } finally {
@@ -871,7 +941,7 @@ function renderSelected() {
     const trend = info?.stats?.trend;
     li.innerHTML = `<span class="swatch" style="background:${r.color}"></span>`
       + `<span class="name" title="${charts.escapeHtml(r.name)}">${charts.escapeHtml(r.name)}</span>`
-      + `<span class="val" title="Trend °C/Dekade">${trend != null ? charts.fmt(trend, 2) : ""}</span>`
+      + `<span class="val" title="Trend ${trendUnit()}">${trend != null ? charts.fmt(trend, trendDigits()) : ""}</span>`
       + `<button type="button" aria-label="Entfernen" title="Entfernen">✕</button>`;
     li.querySelector("button").addEventListener("click", () => removeRegion(r.uid));
     li.querySelector(".name").addEventListener("click", () => zoomToRegion(r));
@@ -1052,9 +1122,9 @@ function downloadCsv() {
   const q = (v) => `"${String(v).replace(/"/g, '""')}"`;
   const lines = [
     `# TrendDetective Global Explorer – ${state.meta.dataset.name}`,
-    `# Anomalie in °C gegenüber ${d.baseline[0]}-${d.baseline[1]}, ${d.season_label}; flächengewichtetes Mittel je Region`,
+    `# Anomalie in ${unitOf()} gegenüber ${d.baseline[0]}-${d.baseline[1]}, ${d.season_label}; flächengewichtetes Mittel je Region`,
     `# Quelle: ${state.meta.dataset.url}`,
-    ["year", ...series.flatMap((s) => [q(`${s.name} anomaly_C`), q(`${s.name} mean11y_C`), q(`${s.name} trend30y_C_per_decade`), q(`${s.name} coverage`)])].join(","),
+    ["year", ...series.flatMap((s) => [q(`${s.name} anomaly`), q(`${s.name} mean11y`), q(`${s.name} trend30y_per_decade`), q(`${s.name} coverage`)])].join(","),
   ];
   d.years.forEach((y, i) => {
     const row = [y];
@@ -1092,7 +1162,7 @@ async function renderAnalysis() {
   const body = $("analysis-body");
   if (document.querySelector(".layout").classList.contains("analysis-collapsed")) return;
   const d = state.regionData;
-  $("analysis-meta").textContent = `${seasonLabel()} · ${state.start}–${state.end} · Referenz ${baselineLabel()} · NASA GISTEMP v4`;
+  $("analysis-meta").textContent = `${seasonLabel()} · ${state.start}–${state.end} · Referenz ${baselineLabel()} · ${state.ds === "gpcp" ? "GPCP v2.3" : "NASA GISTEMP v4"}`;
   const series = seriesForCharts();
   const needRegions = ["series", "tempo", "stripes", "seasons", "stats", "dist"].includes(state.tab);
   if (needRegions && !series.length) {
@@ -1155,7 +1225,7 @@ async function renderAnalysis() {
       left.style.minHeight = "0";
       const right = document.createElement("div");
       right.className = "side-note";
-      right.innerHTML = `<h4>Hovmöller-Diagramm</h4><p>Mittlere Anomalie jedes Breitenkreises (über alle Längengrade) für jedes Jahr. So sieht man, <b>wo</b> und <b>wann</b> die Erwärmung eingesetzt hat.</p><p>Die rote Fläche oben rechts ist die <b>arktische Verstärkung</b>: Seit etwa 2000 erwärmt sich der hohe Norden viel stärker als der Rest der Welt.</p><p>Leere Flächen: weniger als ein Viertel des Breitenkreises hat Messungen (z. B. Antarktis vor 1957).</p><p>Farbige Balken rechts = Breitenbereich deiner Regionen; gestrichelt = gewählter Zeitraum.</p>`;
+      right.innerHTML = `<h4>Hovmöller-Diagramm</h4><p>Mittlere Anomalie jedes Breitenkreises (über alle Längengrade) für jedes Jahr. So sieht man, <b>wo</b> und <b>wann</b> sich das Klima verändert hat.</p>${isTemp() ? "<p>Die rote Fläche oben rechts ist die <b>arktische Verstärkung</b>: Seit etwa 2000 erwärmt sich der hohe Norden viel stärker als der Rest der Welt.</p>" : "<p>Beim Niederschlag zeigt das Diagramm u. a. die Verschiebung der tropischen Regengürtel und feuchtere hohe Breiten; El-Niño-Jahre (z. B. 1983, 1998, 2016) erscheinen als Streifen in den Tropen.</p>"}${isTemp() ? "<p>Leere Flächen: weniger als ein Viertel des Breitenkreises hat Messungen (z. B. Antarktis vor 1957).</p>" : ""}<p>Farbige Balken rechts = Breitenbereich deiner Regionen; gestrichelt = gewählter Zeitraum.</p>`;
       split.append(left, right);
       body.appendChild(split);
       charts.hovmoller(left, { years: z.years, lats: z.lats, values: z.values, period: [state.start, state.end], highlight });
@@ -1169,7 +1239,7 @@ async function renderDistribution(body, series, stale) {
   if (!series.some((s) => s.uid === state.distUid)) state.distUid = series[0].uid;
   const r = state.regions.find((x) => x.uid === state.distUid);
   const spec = { ...r.spec, name: r.name };
-  const params = { region: JSON.stringify(spec), season: state.season, baseline: state.baseline };
+  const params = { ds: state.ds, region: JSON.stringify(spec), season: state.season, baseline: state.baseline };
   const key = JSON.stringify(params);
   if (!distCache.has(key)) {
     body.innerHTML = `<div class="empty">Berechne Verteilung …</div>`;
@@ -1213,23 +1283,25 @@ async function renderDistribution(body, series, stale) {
 
 const STAT_ROWS = [
   { group: "Trend im Zeitraum" },
-  { key: "trend", label: "Linearer Trend (OLS)", unit: "°C/Dek.", digits: 3, info: "Kleinste-Quadrate-Gerade durch die Jahreswerte." },
-  { key: "trend_ci", label: "± 95-%-Konfidenz", unit: "°C/Dek.", digits: 3, signed: false, info: "Autokorrelationskorrigiert (effektive Stichprobengröße, Santer et al. 2000)." },
+  { key: "trend", label: "Linearer Trend (OLS)", unit: "T", digits: 3, info: "Kleinste-Quadrate-Gerade durch die Jahreswerte." },
+  { key: "trend_ci", label: "± 95-%-Konfidenz", unit: "T", digits: 3, signed: false, info: "Autokorrelationskorrigiert (effektive Stichprobengröße, Santer et al. 2000)." },
   { key: "trend_p", label: "p-Wert (t-Test, AR1-korr.)", p: true },
-  { key: "sen", label: "Theil-Sen-Steigung", unit: "°C/Dek.", digits: 3, info: "Robuster Median aller paarweisen Steigungen – unempfindlich gegen Ausreißer." },
+  { key: "sen", label: "Theil-Sen-Steigung", unit: "T", digits: 3, info: "Robuster Median aller paarweisen Steigungen – unempfindlich gegen Ausreißer." },
   { key: "mk_p", label: "Mann-Kendall p-Wert", p: true, info: "Nichtparametrischer Trendtest (ohne Autokorrelationskorrektur)." },
-  { key: "change", label: "Änderung über den Zeitraum", unit: "°C", digits: 2, info: "Trend × Länge des Zeitraums." },
+  { key: "change", label: "Änderung über den Zeitraum", unit: "U", digits: 2, info: "Trend × Länge des Zeitraums." },
+  { key: "trend_rel", label: "Relativer Trend", unit: "%/Dek.", digits: 1, info: "Trend geteilt durch das Klimamittel 1991–2020 der Region." },
   { key: "vs_global", label: "Faktor ggü. globalem Trend", unit: "×", digits: 2, signed: false },
   { group: "Dynamik" },
-  { key: "trend_first_half", label: "Trend 1. Hälfte", unit: "°C/Dek.", digits: 3, halves: 0 },
-  { key: "trend_second_half", label: "Trend 2. Hälfte", unit: "°C/Dek.", digits: 3, halves: 1 },
-  { key: "acceleration", label: "Beschleunigung", unit: "°C/Dek.", digits: 3, info: "Trend 2. Hälfte minus Trend 1. Hälfte; fett = signifikant (|Δ| > 1,96·σ)." },
+  { key: "trend_first_half", label: "Trend 1. Hälfte", unit: "T", digits: 3, halves: 0 },
+  { key: "trend_second_half", label: "Trend 2. Hälfte", unit: "T", digits: 3, halves: 1 },
+  { key: "acceleration", label: "Beschleunigung", unit: "T", digits: 3, info: "Trend 2. Hälfte minus Trend 1. Hälfte; fett = signifikant (|Δ| > 1,96·σ)." },
   { key: "snr", label: "Signal / Rauschen", unit: "σ", digits: 1, signed: false, info: "Lineare Änderung geteilt durch Standardabweichung der trendbereinigten Jahreswerte." },
   { key: "emergence_year", label: "Signal tritt hervor ab", year: true, info: "Erstes Jahr, ab dem das 11-Jahres-Mittel dauerhaft über 2σ der Jahresschwankung der Referenzperiode liegt (Hawkins & Sutton 2012)." },
   { group: "Niveau" },
-  { key: "mean_last10", label: "Mittel letzte 10 Jahre", unit: "°C", digits: 2 },
+  { key: "mean_last10", label: "Mittel letzte 10 Jahre", unit: "U", digits: 2 },
+  { key: "clim", label: "Klimamittel 1991–2020 (absolut)", unit: "U", digits: 2, signed: false },
   { key: "warmest", label: "Wärmste Jahre", list: true },
-  { key: "noise_std", label: "Jahr-zu-Jahr-Schwankung (σ)", unit: "°C", digits: 2, signed: false },
+  { key: "noise_std", label: "Jahr-zu-Jahr-Schwankung (σ)", unit: "U", digits: 2, signed: false },
   { group: "Region" },
   { key: "_area", label: "Fläche", area: true },
   { key: "_cells", label: "2°-Gitterzellen", cells: true },
@@ -1243,15 +1315,17 @@ function renderStats(body, series, d) {
   for (const s of series) {
     const st = s.stats;
     kpis.innerHTML += `<div class="kpi"><div class="k-name"><i style="background:${s.color}"></i>${charts.escapeHtml(charts.truncate(s.name, 24))}</div>`
-      + `<div class="k-val">${charts.fmt(st.trend, 2)} <small>°C/Dek.</small></div>`
-      + `<div class="k-sub">${st.vs_global != null ? "× " + st.vs_global.toFixed(1).replace(".", ",") + " global · " : ""}${charts.fmt(st.change, 1)} °C seit ${d.period[0]}</div></div>`;
+      + `<div class="k-val">${charts.fmt(st.trend, trendDigits())} <small>${trendShort()}</small></div>`
+      + `<div class="k-sub">${st.vs_global != null ? "× " + st.vs_global.toFixed(1).replace(".", ",") + " global · " : ""}${st.trend_rel != null ? charts.fmt(st.trend_rel, 1) + " %/Dek. · " : ""}${charts.fmt(st.change, isTemp() ? 1 : 2)} ${unitOf()} seit ${d.period[0]}</div></div>`;
   }
   body.appendChild(kpis);
   body.appendChild(summaryText(series, d));
   const table = document.createElement("table");
   table.className = "stats";
   let html = `<thead><tr><th>${d.season_label}, ${d.period[0]}–${d.period[1]}</th>${series.map((s) => `<th><span style="color:${s.color}">■</span> ${charts.escapeHtml(charts.truncate(s.name, 20))}</th>`).join("")}</tr></thead><tbody>`;
+  const present = (key) => series.some((x) => x.stats?.[key] != null);
   for (const row of STAT_ROWS) {
+    if (row.key && !row.key.startsWith("_") && !row.group && ["trend_rel", "clim", "vs_global"].includes(row.key) && !present(row.key)) continue;
     if (row.group) { html += `<tr class="grp"><td colspan="${series.length + 1}">${row.group}</td></tr>`; continue; }
     let label = row.label;
     if (row.halves != null) {
@@ -1268,8 +1342,10 @@ function renderStats(body, series, d) {
       else if (row.area) cell = s.raw.area_km2 != null ? `${Math.round(s.raw.area_km2).toLocaleString("de-DE")} km²` : "–";
       else if (row.cells) cell = s.raw.cells;
       else {
-        cell = charts.fmt(st[row.key], row.digits, row.signed !== false);
-        if (cell !== "–" && row.unit) cell += ` ${row.unit}`;
+        const digits = row.unit === "T" ? Math.max(row.digits, trendDigits()) : row.digits;
+        cell = charts.fmt(st[row.key], digits, row.signed !== false);
+        const unit = row.unit === "T" ? trendShort() : row.unit === "U" ? unitOf() : row.unit;
+        if (cell !== "–" && unit) cell += ` ${unit}`;
         if (row.key === "acceleration" && st.acceleration_significant) cell = `<b>${cell}</b>`;
       }
       html += `<td class="${cls}">${cell}</td>`;
@@ -1297,19 +1373,30 @@ function summaryText(series, d) {
   p.style.color = "var(--text-2)";
   const valid = series.filter((s) => s.stats?.trend != null);
   if (!valid.length) return p;
-  const sorted = [...valid].sort((a, b) => b.stats.trend - a.stats.trend);
-  const fast = sorted[0], slow = sorted[sorted.length - 1];
-  const g = d.global?.trend;
-  let txt = `Im Zeitraum ${d.period[0]}–${d.period[1]} (${d.season_label}) erwärmt sich <b>${charts.escapeHtml(fast.name)}</b> am schnellsten mit ${charts.fmt(fast.stats.trend, 2)} °C pro Dekade`;
-  if (fast.stats.vs_global != null) txt += ` – ${fast.stats.vs_global.toFixed(1).replace(".", ",")}-mal so schnell wie die Welt im Mittel (${charts.fmt(g, 2)} °C/Dek.)`;
-  txt += ".";
-  if (sorted.length > 1) {
-    txt += ` Am langsamsten: <b>${charts.escapeHtml(slow.name)}</b> (${charts.fmt(slow.stats.trend, 2)} °C/Dek.`;
-    if (slow.stats.trend_p != null && slow.stats.trend_p >= 0.05) txt += `, statistisch nicht signifikant`;
-    txt += ").";
+  const name = (s) => `<b>${charts.escapeHtml(s.name)}</b>`;
+  const tr = (s) => `${charts.fmt(s.stats.trend, trendDigits())} ${trendUnit()}`;
+  const nsig = (s) => (s.stats.trend_p != null && s.stats.trend_p >= 0.05 ? ", statistisch nicht signifikant" : "");
+  let txt;
+  if (isTemp()) {
+    const sorted = [...valid].sort((a, b) => b.stats.trend - a.stats.trend);
+    const fast = sorted[0], slow = sorted[sorted.length - 1];
+    const g = d.global?.trend;
+    txt = `Im Zeitraum ${d.period[0]}–${d.period[1]} (${d.season_label}) erwärmt sich ${name(fast)} am schnellsten mit ${tr(fast)}`;
+    if (fast.stats.vs_global != null) txt += ` – ${fast.stats.vs_global.toFixed(1).replace(".", ",")}-mal so schnell wie die Welt im Mittel (${charts.fmt(g, 2)} °C/Dek.)`;
+    txt += ".";
+    if (sorted.length > 1) txt += ` Am langsamsten: ${name(slow)} (${tr(slow)}${nsig(slow)}).`;
+    const acc = valid.filter((s) => s.stats.acceleration_significant && s.stats.acceleration > 0);
+    if (acc.length) txt += ` Signifikant beschleunigt hat sich die Erwärmung in: ${acc.map((s) => charts.escapeHtml(s.name)).join(", ")}.`;
+  } else {
+    const key = (s) => s.stats.trend_rel ?? s.stats.trend;
+    const sorted = [...valid].sort((a, b) => key(b) - key(a));
+    const wet = sorted[0], dry = sorted[sorted.length - 1];
+    const rel = (s) => (s.stats.trend_rel != null ? ` bzw. ${charts.fmt(s.stats.trend_rel, 1)} % pro Dekade` : "");
+    txt = `Im Zeitraum ${d.period[0]}–${d.period[1]} (${d.season_label}) wird ${name(wet)} am deutlichsten feuchter (${tr(wet)}${rel(wet)}${nsig(wet)})`;
+    if (sorted.length > 1) txt += `, ${name(dry)} am deutlichsten trockener (${tr(dry)}${rel(dry)}${nsig(dry)})`;
+    const sig = valid.filter((s) => s.stats.trend_p != null && s.stats.trend_p < 0.05);
+    txt += `. Niederschlag schwankt stark von Jahr zu Jahr – ${sig.length ? `signifikant ist der Trend nur in: ${sig.map((s) => charts.escapeHtml(s.name)).join(", ")}` : "keiner der Trends ist statistisch signifikant"}.`;
   }
-  const acc = valid.filter((s) => s.stats.acceleration_significant && s.stats.acceleration > 0);
-  if (acc.length) txt += ` Signifikant beschleunigt hat sich die Erwärmung in: ${acc.map((s) => charts.escapeHtml(s.name)).join(", ")}.`;
   p.innerHTML = txt;
   return p;
 }
@@ -1318,7 +1405,9 @@ function buildAbout() {
   const ds = state.meta.dataset;
   $("about-body").innerHTML = `
     <h3>Daten</h3>
-    <p><b>${ds.name}</b> – monatliche Oberflächentemperatur-Anomalien auf einem 2°×2°-Gitter (≈ 220 km), ${ds.first[0]} bis ${ds.last[1]}/${ds.last[0]}, relativ zu ${ds.baseline[0]}–${ds.baseline[1]}. Über Land aus rund 27 000 Wetterstationen (GHCNv4), über dem Meer aus Schiffs- und Bojenmessungen (ERSSTv5). NASA interpoliert jede Zelle aus Stationen im Umkreis von 1200 km – Zellen ohne Station in Reichweite bleiben <b>leer</b>, es wird nichts erfunden.</p>
+    ${isTemp()
+      ? `<p><b>${ds.name}</b> – monatliche Oberflächentemperatur-Anomalien auf einem 2°×2°-Gitter (≈ 220 km), ${ds.first[0]} bis ${ds.last[1]}/${ds.last[0]}, relativ zu ${ds.baseline[0]}–${ds.baseline[1]}. Über Land aus rund 27 000 Wetterstationen (GHCNv4), über dem Meer aus Schiffs- und Bojenmessungen (ERSSTv5). NASA interpoliert jede Zelle aus Stationen im Umkreis von 1200 km – Zellen ohne Station in Reichweite bleiben <b>leer</b>, es wird nichts erfunden.</p>`
+      : `<p><b>${ds.name}</b> – monatlicher Niederschlag auf einem 2,5°×2,5°-Gitter (≈ 280 km), ${ds.first[0]} bis ${ds.last[1]}/${ds.last[0]}. Kombiniert Satellitenmessungen (Mikrowelle/Infrarot) mit Regenmesser-Daten des Weltzentrums für Niederschlagsklimatologie (GPCC, DWD). Anomalien beziehen sich auf das Monatsmittel ${ds.baseline[0]}–${ds.baseline[1]}; „relativer Trend“ teilt durch dieses Klimamittel. Niederschlag schwankt stark von Jahr zu Jahr, Trends sind daher seltener signifikant als bei der Temperatur.</p>`}
     <p class="hint">${charts.escapeHtml(ds.citation)} · <a href="${ds.url}" target="_blank" rel="noopener">${ds.url}</a></p>
     <h3>Karte</h3>
     <p>Die Werte gehören zu den Mittelpunkten der Gitterzellen. Für die glatte Darstellung wird zwischen den vier benachbarten Mittelpunkten <b>bilinear interpoliert</b>; wo Nachbarn fehlen, wird nur zwischen vorhandenen Werten gemittelt und nicht über Datenlücken hinaus extrapoliert. Mit „Zwischen Gitterpunkten interpolieren“ aus siehst du die Rohzellen.</p>
@@ -1347,17 +1436,21 @@ function refreshAll() {
 }
 
 async function main() {
+  const hashDs = new URLSearchParams(location.hash.slice(1)).get("d");
+  if (hashDs && ["gistemp", "gpcp"].includes(hashDs)) state.ds = hashDs;
   try {
-    state.meta = await getJSON("meta");
+    state.meta = await getJSON("meta", { ds: state.ds });
   } catch (err) {
     $("dataset-line").textContent = "Datensatz konnte nicht geladen werden: " + err.message;
     return;
   }
   const ds = state.meta.dataset;
-  $("dataset-line").textContent = `${ds.name} · 2°-Gitter · ${ds.first[0]}–${String(ds.last[1]).padStart(2, "0")}/${ds.last[0]} · monatlich`;
+  state.baseline = `${ds.baseline[0]}-${ds.baseline[1]}`;
+  state.start = Math.max(state.start, ds.first[0]);
   state.end = lastFullYear();
   state.year = state.end;
   buildControls();
+  configureCharts();
   if (!readHash()) for (const spec of DEFAULT_REGIONS) addRegion(spec, { silent: true });
   if (!state.end) state.end = lastFullYear();
   syncControls();

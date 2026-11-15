@@ -3,6 +3,9 @@
 // Diverging blue–white–red (ColorBrewer RdBu, reversed: blue = colder, red = warmer).
 const RDBU = ["#053061", "#2166ac", "#4393c3", "#92c5de", "#d1e5f0", "#f2f2f2",
   "#fddbc7", "#f4a582", "#d6604d", "#b2182b", "#67001f"];
+// Diverging brown–white–green (ColorBrewer BrBG): brown = drier, green = wetter.
+const BRBG = ["#543005", "#8c510a", "#bf812d", "#dfc27d", "#f6e8c3", "#f2f2f2",
+  "#c7eae5", "#80cdc1", "#35978f", "#01665e", "#003c30"];
 // Sequential single-hue ramp for magnitudes (dark → bright orange on a dark map).
 const SEQ = ["#1d1410", "#3d2014", "#64301a", "#8c401d", "#b4521f", "#d86a25", "#f08a3c", "#fbb06b", "#fdd3a5"];
 
@@ -25,6 +28,7 @@ function buildLut(stops, size = 256) {
 
 export const SCALES = {
   diverging: { lut: buildLut(RDBU), stops: RDBU, symmetric: true },
+  drywet: { lut: buildLut(BRBG), stops: BRBG, symmetric: true },
   sequential: { lut: buildLut(SEQ), stops: SEQ, symmetric: false },
 };
 

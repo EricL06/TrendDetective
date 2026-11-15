@@ -61,7 +61,24 @@ BASELINES: dict[str, tuple[int, int]] = {
     "1991-2020": (1991, 2020),
     "1880-1900": (1880, 1900),
     "1961-1990": (1961, 1990),
+    "1981-2010": (1981, 2010),
 }
+
+def layer_info(ds: GriddedDataset) -> dict[str, dict[str, str]]:
+    """Labels and units of the map layers for this dataset's variable."""
+    u = ds.unit
+    warm = ds.kind == "temperature"
+    info = {
+        "trend": {"label": "Erwärmungstrend" if warm else "Niederschlagstrend", "unit": f"{u}/Dekade"},
+        "anomaly": {"label": "Mittlere Anomalie im Zeitraum", "unit": u},
+        "acceleration": {"label": "Beschleunigung (Trend 2. Hälfte − 1. Hälfte)", "unit": f"{u}/Dekade"},
+        "snr": {"label": "Signal-Rausch-Verhältnis", "unit": "σ"},
+        "gradient": {"label": "Räumlicher Gradient des Trends", "unit": f"{u}/Dekade pro 1000 km"},
+    }
+    if ds.clim is not None:
+        info["trend_rel"] = {"label": "Relativer Trend (zum Klimamittel)", "unit": "%/Dekade"}
+    return info
+
 
 LAYERS: dict[str, dict[str, str]] = {
     "trend": {"label": "Erwärmungstrend", "unit": "°C/Dekade"},
@@ -400,8 +417,8 @@ def seasonal_grid(ds: GriddedDataset, season: str = "annual",
 def _baseline(baseline: str | None, ds: GriddedDataset) -> tuple[int, int] | None:
     if baseline in (None, "", "native"):
         return tuple(ds.baseline)  # type: ignore[return-value]
-    if baseline not in BASELINES:
-        raise AnalysisInputError(f"Unbekannte Referenzperiode: {baseline}")
+    if baseline not in BASELINES or baseline not in ds.baselines:
+        raise AnalysisInputError(f"Referenzperiode {baseline} gibt es für diesen Datensatz nicht")
     return BASELINES[baseline]
 
 
@@ -503,16 +520,20 @@ def _spatial_gradient(ds: GriddedDataset, field: np.ndarray) -> np.ndarray:
 def layer(ds: GriddedDataset, kind: str = "trend", start: Any = None, end: Any = None,
           season: str = "annual", baseline: str | None = None) -> dict[str, Any]:
     """One map layer as a flat grid (rows south → north, columns west → east)."""
-    if kind not in LAYERS:
+    info = layer_info(ds)
+    if kind not in info:
         raise AnalysisInputError(f"Unbekannte Ebene: {kind}")
     years, grid = seasonal_grid(ds, season, baseline)
     start_y, end_y, sel = _period(years, start, end)
     x = years[sel].astype(np.float64)
     y = grid[sel]
     sig = None
-    if kind == "trend":
+    if kind in ("trend", "trend_rel"):
         fit = ols_trend(x, y)
         values = fit["slope"] * 10
+        if kind == "trend_rel":
+            with np.errstate(invalid="ignore", divide="ignore"):
+                values = np.where(ds.clim > 0.1, values / ds.clim * 100, np.nan)  # skip near-rainless cells
         sig = fit["p"] < 0.05
         sig = np.where(np.isfinite(values), sig, False)
     elif kind == "anomaly":
@@ -553,7 +574,7 @@ def layer(ds: GriddedDataset, kind: str = "trend", start: Any = None, end: Any =
         summary["significant_area"] = _num((wsel * sig[np.isfinite(values)]).sum() / wsel.sum(), 3) if finite.size else None
     return {
         "kind": kind,
-        **LAYERS[kind],
+        **info[kind],
         "season": season,
         "season_label": season_spec(season)[0],
         "baseline": list(_baseline(baseline, ds) or ds.baseline),
@@ -681,8 +702,9 @@ def _series_stats(years: np.ndarray, values: np.ndarray, start_y: int, end_y: in
         noise = float(detr.std(ddof=1))
         ref = float(base_vals.mean())
         run = _running_mean(values)
-        above = np.isfinite(run) & (run - ref > 2 * noise)
         valid_idx = np.nonzero(np.isfinite(run))[0]
+        sign = np.sign(run[valid_idx[-1]] - ref) if valid_idx.size else 1.0
+        above = np.isfinite(run) & (sign * (run - ref) > 2 * noise)
         toe = None
         if valid_idx.size and above[valid_idx[-1]]:
             k = valid_idx.size - 1
@@ -692,6 +714,13 @@ def _series_stats(years: np.ndarray, values: np.ndarray, start_y: int, end_y: in
         result["noise_std"] = _num(noise, 3)
         result["emergence_year"] = toe
     return result
+
+
+def _region_clim(ds: GriddedDataset, weights: np.ndarray) -> float | None:
+    ok = np.isfinite(ds.clim) & (weights > 0)
+    if not ok.any():
+        return None
+    return float((ds.clim[ok] * weights[ok]).sum() / weights[ok].sum())
 
 
 def _monthly_trends(ds: GriddedDataset, weights: np.ndarray, start_y: int, end_y: int) -> list[dict[str, Any]]:
@@ -729,8 +758,14 @@ def region_series(ds: GriddedDataset, regions: Sequence[Region], start: Any = No
         info["area_km2"] = round(region_area_km2(ds, weights))
         stats_ = _series_stats(years, values, start_y, end_y, base)
         g = global_stats.get("trend")
-        if stats_.get("trend") is not None and g:
+        if stats_.get("trend") is not None and g and ds.kind == "temperature":
             stats_["vs_global"] = _num(stats_["trend"] / g, 2)
+        if stats_.get("trend") is not None and ds.clim is not None:
+            clim = _region_clim(ds, weights)
+            if clim and clim > 0.05:
+                stats_["clim"] = _num(clim, 3)
+                stats_["trend_rel"] = _num(stats_["trend"] / clim * 100, 2)
+                stats_["trend_rel_ci"] = _num((stats_.get("trend_ci") or 0) / clim * 100, 2)
         info["stats"] = stats_
         if include_series:
             info["values"] = _round_list(values, 3)
@@ -765,7 +800,7 @@ def ranking(ds: GriddedDataset, start: Any = None, end: Any = None, season: str 
             "trend": s.get("trend"), "trend_ci": s.get("trend_ci"), "trend_p": s.get("trend_p"),
             "vs_global": s.get("vs_global"), "change": s.get("change"),
             "acceleration": s.get("acceleration"), "emergence_year": s.get("emergence_year"),
-            "snr": s.get("snr"),
+            "snr": s.get("snr"), "trend_rel": s.get("trend_rel"),
         })
     rows.sort(key=lambda r: -(r["trend"] if r["trend"] is not None else -1e9))
     data["rows"] = rows
