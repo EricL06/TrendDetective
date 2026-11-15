@@ -81,9 +81,10 @@ function loading(on, text = "Berechne …") {
 }
 
 let toastTimer;
-function toast(msg) {
+function toast(msg, kind = "error") {
   const t = $("toast");
   t.textContent = msg;
+  t.className = "toast" + (kind === "info" ? " info" : "");
   t.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (t.hidden = true), 6000);
@@ -217,6 +218,7 @@ function buildControls() {
   $("opacity").addEventListener("input", (e) => {
     state.opacity = Number(e.target.value);
     if (map?.getLayer("overlay")) map.setPaintProperty("overlay", "raster-opacity", state.opacity);
+    if (map?.getLayer("caps")) map.setPaintProperty("caps", "fill-opacity", state.opacity);
   });
   $("scale-max").addEventListener("change", (e) => {
     const v = Number(e.target.value);
@@ -241,6 +243,13 @@ function buildControls() {
   $("year-slider").addEventListener("input", (e) => { state.year = Number(e.target.value); showYear(); });
   $("btn-about").addEventListener("click", () => $("about").showModal());
   $("btn-draw").addEventListener("click", () => setDrawMode(!drawMode));
+  $("btn-csv").addEventListener("click", downloadCsv);
+  $("btn-link").addEventListener("click", async () => {
+    writeHash();
+    try { await navigator.clipboard.writeText(location.href); toast("Link mit allen Einstellungen kopiert.", "info"); }
+    catch { toast("Kopieren nicht möglich – bitte die Adresszeile kopieren.", "info"); }
+  });
+  setupResize();
   buildPresets();
   buildSearch();
   buildAbout();
@@ -313,7 +322,7 @@ function initMap() {
       map.setStyle(FALLBACK_STYLE);
     }
   });
-  window.__map = map; // debugging aid
+  if (location.search.includes("debug")) window.__map = map; // for automated UI checks
   overlayCanvas = document.createElement("canvas");
   overlayCanvas.width = 1536;
   overlayCanvas.height = 1536;
@@ -370,26 +379,30 @@ function firstLabelLayer() {
 
 function addOverlayLayers() {
   if (map.getSource("overlay")) return;
-  const dbg = location.search;
-  if (!dbg.includes("noimg")) map.addSource("overlay", {
+  map.addSource("overlay", {
     type: "image",
     url: overlayUrl || BLANK_PNG,
     coordinates: OVERLAY_COORDS,
   });
-  if (map.getSource("overlay")) map.addLayer({
+  map.addLayer({
     id: "overlay", type: "raster", source: "overlay",
     paint: { "raster-opacity": state.opacity, "raster-fade-duration": 0, "raster-resampling": "linear" },
   }, firstLabelLayer());
-  if (!location.search.includes("nocoast")) map.addSource("coast", { type: "geojson", data: "/static/vendor/natural-earth/coastline_50m.geojson" });
-  if (map.getSource("coast")) map.addLayer({
+  // Mercator images stop at ±85.05°; caps in the zonal-mean colour close the globe.
+  map.addSource("caps", { type: "geojson", data: polarCaps() });
+  map.addLayer({
+    id: "caps", type: "fill", source: "caps",
+    paint: { "fill-color": ["coalesce", ["get", "color"], "#1a2230"], "fill-opacity": state.opacity, "fill-antialias": false },
+  }, firstLabelLayer());
+  map.addSource("coast", { type: "geojson", data: "/static/vendor/natural-earth/coastline_50m.geojson" });
+  map.addLayer({
     id: "coast", type: "line", source: "coast",
     paint: { "line-color": "#0b1018", "line-opacity": 0.75, "line-width": ["interpolate", ["linear"], ["zoom"], 0, 0.6, 5, 1.4] },
   }, firstLabelLayer());
-  if (dbg.includes("noregions")) return;
   map.addSource("regions", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-  if (!dbg.includes("nofill")) map.addLayer({ id: "regions-fill", type: "fill", source: "regions", paint: { "fill-color": ["get", "color"], "fill-opacity": 0.08 } });
-  if (!dbg.includes("nohalo")) map.addLayer({ id: "regions-halo", type: "line", source: "regions", paint: { "line-color": "#05080d", "line-width": 4, "line-opacity": 0.6 } });
-  if (!dbg.includes("noline")) map.addLayer({ id: "regions-line", type: "line", source: "regions", paint: { "line-color": ["get", "color"], "line-width": 2 } });
+  map.addLayer({ id: "regions-fill", type: "fill", source: "regions", paint: { "fill-color": ["get", "color"], "fill-opacity": 0.08 } });
+  map.addLayer({ id: "regions-halo", type: "line", source: "regions", paint: { "line-color": "#05080d", "line-width": 4, "line-opacity": 0.6 } });
+  map.addLayer({ id: "regions-line", type: "line", source: "regions", paint: { "line-color": ["get", "color"], "line-width": 2 } });
   map.addSource("draw", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
   map.addLayer({ id: "draw-line", type: "line", source: "draw", paint: { "line-color": "#ffffff", "line-width": 1.5, "line-dasharray": [2, 2] } });
 }
@@ -414,6 +427,34 @@ function touchOverlay() {
     overlayBusy = false;
     if (overlayQueued) { overlayQueued = false; touchOverlay(); }
   }, "image/png");
+}
+
+function polarCaps(colors = {}) {
+  const ring = (a, b) => {
+    const pts = [];
+    for (let lon = -180; lon <= 180; lon += 30) pts.push([lon, a]);
+    for (let lon = 180; lon >= -180; lon -= 30) pts.push([lon, b]);
+    pts.push([-180, a]);
+    return pts;
+  };
+  const cap = (name, a, b) => ({ type: "Feature", properties: { color: colors[name] || null }, geometry: { type: "Polygon", coordinates: [ring(a, b)] } });
+  return { type: "FeatureCollection", features: [cap("n", MERC_MAX_LAT - 0.05, 90), cap("s", -90, -MERC_MAX_LAT + 0.05)] };
+}
+
+function updateCaps(scale) {
+  const src = map?.getSource("caps");
+  if (!src || !state.grid) return;
+  const g = geom();
+  const rowMean = (r) => {
+    let s = 0, n = 0;
+    for (let c = 0; c < g.nlon; c++) { const v = state.grid[r * g.nlon + c]; if (v === v) { s += v; n++; } }
+    return n ? s / n : null;
+  };
+  const north = rowMean(g.nlat - 1), south = rowMean(0);
+  src.setData(polarCaps({
+    n: north == null ? null : cssColor(north, scale),
+    s: south == null ? null : cssColor(south, scale),
+  }));
 }
 
 function currentScale() {
@@ -452,6 +493,7 @@ function redrawOverlay() {
   const mask = state.sig && state.sigMask ? state.sigMask : null;
   renderGrid(overlayCanvas, state.grid, geom(), scale, { smooth: state.smooth, mask });
   touchOverlay();
+  updateCaps(scale);
   updateLegend(scale);
 }
 
@@ -822,7 +864,7 @@ function outlineFor(r) {
 
 function drawRegionsOnMap() {
   const src = map?.getSource("regions");
-  if (!src || location.search.includes("nosetdata")) return;
+  if (!src) return;
   const features = [];
   for (const r of state.regions) {
     const ring = outlineFor(r);
@@ -934,12 +976,61 @@ function buildSearch() {
 // ---------------------------------------------------------------------------
 // Analysis drawer
 
+function setupResize() {
+  const handle = $("resize-handle");
+  let startY = 0, startH = 0;
+  const move = (e) => {
+    const h = Math.min(window.innerHeight * 0.8, Math.max(140, startH - (e.clientY - startY)));
+    document.documentElement.style.setProperty("--analysis-h", `${h}px`);
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    map?.resize();
+    renderAnalysis();
+  };
+  handle.addEventListener("pointerdown", (e) => {
+    startY = e.clientY;
+    startH = $("analysis").getBoundingClientRect().height;
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    e.preventDefault();
+  });
+}
+
+function downloadCsv() {
+  const d = state.regionData;
+  if (!d) { toast("Keine Regionen gewählt.", "info"); return; }
+  const series = seriesForCharts();
+  const q = (v) => `"${String(v).replace(/"/g, '""')}"`;
+  const lines = [
+    `# TrendDetective Global Explorer – ${state.meta.dataset.name}`,
+    `# Anomalie in °C gegenüber ${d.baseline[0]}-${d.baseline[1]}, ${d.season_label}; flächengewichtetes Mittel je Region`,
+    `# Quelle: ${state.meta.dataset.url}`,
+    ["year", ...series.flatMap((s) => [q(`${s.name} anomaly_C`), q(`${s.name} mean11y_C`), q(`${s.name} trend30y_C_per_decade`), q(`${s.name} coverage`)])].join(","),
+  ];
+  d.years.forEach((y, i) => {
+    const row = [y];
+    for (const s of series) row.push(s.values[i] ?? "", s.running[i] ?? "", s.rolling?.[i] ?? "", s.coverage[i] ?? "");
+    lines.push(row.join(","));
+  });
+  const blob = new Blob([lines.join("\n") + "\n"], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `trenddetective_${state.season}_${d.period[0]}-${d.period[1]}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
 function seriesForCharts() {
   const d = state.regionData;
   if (!d) return [];
   return d.regions.map((x) => {
     const r = state.regions.find((y) => y.uid === x._uid);
-    return { name: r?.name || x.name, color: r?.color || "#888", values: x.values, running: x.running, coverage: x.coverage, stats: x.stats, monthly: x.monthly_trends, raw: x };
+    return {
+      uid: x._uid, name: r?.name || x.name, color: r?.color || "#888", values: x.values, running: x.running,
+      coverage: x.coverage, stats: x.stats, monthly: x.monthly_trends, rolling: x.rolling_trend, rollingCi: x.rolling_ci, raw: x,
+    };
   });
 }
 
@@ -952,7 +1043,7 @@ async function renderAnalysis() {
   const d = state.regionData;
   $("analysis-meta").textContent = `${seasonLabel()} · ${state.start}–${state.end} · Referenz ${baselineLabel()} · NASA GISTEMP v4`;
   const series = seriesForCharts();
-  const needRegions = ["series", "stripes", "seasons", "stats"].includes(state.tab);
+  const needRegions = ["series", "tempo", "stripes", "seasons", "stats", "dist"].includes(state.tab);
   if (needRegions && !series.length) {
     body.innerHTML = `<div class="empty">Wähle rechts Regionen aus – oder klicke eine Stelle auf der Karte an.</div>`;
     return;
@@ -960,6 +1051,10 @@ async function renderAnalysis() {
   try {
     if (state.tab === "series") {
       charts.timeSeries(body, { years: d.years, series, period: d.period, baselineLabel: baselineLabel() });
+    } else if (state.tab === "tempo") {
+      charts.rollingTrend(body, { years: d.years, series, window: d.rolling_window, global: null });
+    } else if (state.tab === "dist") {
+      await renderDistribution(body, series);
     } else if (state.tab === "stripes") {
       charts.stripes(body, { years: d.years, series });
       const note = document.createElement("p");
@@ -1017,6 +1112,53 @@ async function renderAnalysis() {
   } catch (err) {
     body.innerHTML = `<div class="empty">${charts.escapeHtml(err.message)}</div>`;
   }
+}
+
+let distCache = null;
+async function renderDistribution(body, series) {
+  if (!series.some((s) => s.uid === state.distUid)) state.distUid = series[0].uid;
+  const r = state.regions.find((x) => x.uid === state.distUid);
+  const spec = { ...r.spec, name: r.name };
+  const params = { region: JSON.stringify(spec), season: state.season, baseline: state.baseline };
+  const key = JSON.stringify(params);
+  if (distCache?.key !== key) {
+    body.innerHTML = `<div class="empty">Berechne Verteilung …</div>`;
+    distCache = { key, data: await getJSON("distribution", params) };
+  }
+  if (state.tab !== "dist") return;
+  const d = distCache.data;
+  body.innerHTML = "";
+  const split = document.createElement("div");
+  split.className = "split";
+  const left = document.createElement("div");
+  left.style.cssText = "min-height:0;display:flex;flex-direction:column";
+  const pick = document.createElement("div");
+  pick.className = "chips small";
+  pick.style.marginBottom = "6px";
+  for (const s of series) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "chip" + (s.uid === state.distUid ? " active" : "");
+    b.innerHTML = `<span style="color:${s.color}">■</span> ${charts.escapeHtml(charts.truncate(s.name, 26))}`;
+    b.addEventListener("click", () => { state.distUid = s.uid; renderAnalysis(); });
+    pick.appendChild(b);
+  }
+  const chartHost = document.createElement("div");
+  chartHost.style.cssText = "flex:1;min-height:0;position:relative";
+  left.append(pick, chartHost);
+  const right = document.createElement("div");
+  right.className = "side-note";
+  split.append(left, right);
+  body.appendChild(split);
+  const colors = charts.distributionChart(chartHost, d);
+  const pct = (v) => (v == null ? "–" : `${(v * 100).toFixed(v < 0.1 ? 1 : 0).replace(".", ",")} %`);
+  right.innerHTML = `<h4>${charts.escapeHtml(r.name)} · ${charts.escapeHtml(d.season_label)}</h4>`
+    + `<table class="stats"><thead><tr><th>Zeitraum</th><th>Mittel</th><th>&gt; 2σ</th><th>&gt; 3σ</th></tr></thead><tbody>`
+    + d.periods.map((p, k) => `<tr><td><span style="color:${colors[Math.min(k, colors.length - 1)]}">■</span> ${p.period[0]}–${p.period[1]}</td><td>${charts.fmt(p.mean, 1)}σ</td><td>${pct(p.above2)}</td><td>${pct(p.above3)}</td></tr>`).join("")
+    + `</tbody></table>`
+    + `<p style="margin-top:8px">Jede Gitterzelle und jedes Jahr wird an der <b>eigenen</b> Jahr-zu-Jahr-Schwankung (σ) der Referenzperiode ${d.baseline[0]}–${d.baseline[1]} gemessen. In einem stabilen Klima läge nur ≈ 2 % der Fläche über 2σ und ≈ 0,1 % über 3σ.</p>`
+    + `<p>Rechtsverschiebung = was früher eine seltene Hitze-${d.season_label === "Jahr" ? "jahr" : "saison"} war, ist heute normal (nach Hansen et al. 2012, PNAS).</p>`
+    + `<p class="hint">${d.cells} Gitterzellen. Vorsicht beim Vergleich mit Stationsdaten: GISTEMP glättet über bis zu 1200 km, und über dem Meer schwankt die Temperatur wenig – beides macht σ klein und die Verschiebung in σ größer als an einer einzelnen Wetterstation. Am aussagekräftigsten ist der Sommer (JJA) über Land.</p>`;
 }
 
 const STAT_ROWS = [
@@ -1154,7 +1296,6 @@ function refreshAll() {
 }
 
 async function main() {
-  if (location.search.includes("flat")) state.globe = false;
   try {
     state.meta = await getJSON("meta");
   } catch (err) {

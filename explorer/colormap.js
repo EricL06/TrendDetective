@@ -124,8 +124,8 @@ export function renderGrid(canvas, grid, geom, scale, { smooth = true, mask = nu
 
   if (mask) {
     // Stipple: a small dark dot in the centre of each cell without a significant trend.
-    ctx.fillStyle = "rgba(10,14,20,0.55)";
-    const rad = Math.max(0.9, W / nlon / 6);
+    ctx.fillStyle = "rgba(10,14,20,0.42)";
+    const rad = Math.max(0.8, W / nlon / 8);
     for (let r = 0; r < nlat; r++) {
       const lat = lat0 + r * dlat;
       if (Math.abs(lat) > MERC_MAX_LAT) continue;

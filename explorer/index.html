@@ -114,16 +114,21 @@
 
     <!-- Bottom: analysis -->
     <section class="analysis" id="analysis">
+      <div class="resize-handle" id="resize-handle" title="Höhe ziehen" aria-hidden="true"></div>
       <div class="analysis-head">
         <div class="tabs" role="tablist" id="tabs">
           <button role="tab" data-tab="series" aria-selected="true">Zeitreihe</button>
+          <button role="tab" data-tab="tempo">Erwärmungstempo</button>
           <button role="tab" data-tab="stripes">Wärmestreifen</button>
           <button role="tab" data-tab="seasons">Jahreszeiten</button>
+          <button role="tab" data-tab="dist">Extreme</button>
           <button role="tab" data-tab="stats">Statistik</button>
           <button role="tab" data-tab="ranking">Ranking</button>
           <button role="tab" data-tab="zonal">Breitengrade</button>
         </div>
         <div class="analysis-meta" id="analysis-meta"></div>
+        <button class="ghost small" id="btn-csv" type="button" title="Zeitreihen der Regionen als CSV herunterladen">CSV</button>
+        <button class="ghost small" id="btn-link" type="button" title="Link mit allen Einstellungen kopieren">Link teilen</button>
         <button class="icon-btn" id="btn-toggle-analysis" type="button" aria-label="Analyse ein-/ausklappen" title="Ein-/ausklappen">▾</button>
       </div>
       <div class="analysis-body" id="analysis-body"></div>

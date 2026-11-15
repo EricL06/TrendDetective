@@ -443,3 +443,135 @@ export function truncate(s, n) {
 }
 
 export { SCALES };
+
+/** Rolling-window trend per region ("Erwärmungstempo"). */
+export function rollingTrend(container, { years, series, window, global }) {
+  container.innerHTML = "";
+  const wrap = document.createElement("div");
+  wrap.className = "series-wrap";
+  container.appendChild(wrap);
+  const legend = document.createElement("div");
+  legend.className = "chart-legend";
+  legend.innerHTML = series.map((s) => `<span style="--c:${s.color}">${escapeHtml(s.name)}</span>`).join("")
+    + `<span class="key">Trend der jeweils letzten ${window} Jahre, aufgetragen am Endjahr${series.length <= 2 ? " · Fläche = 95-%-Konfidenz" : ""}</span>`;
+  wrap.appendChild(legend);
+  const host = document.createElement("div");
+  host.style.cssText = "flex:1;min-height:0;position:relative";
+  wrap.appendChild(host);
+  const m = { l: 48, r: series.length <= 4 ? 118 : 16, t: 8, b: 26 };
+  const { svg, W, H, iw, ih } = frame(host, m);
+  let lo = 0, hi = 0, first = Infinity;
+  const band = series.length <= 2;
+  for (const s of series) s.rolling.forEach((v, i) => {
+    if (v == null) return;
+    first = Math.min(first, i);
+    const c = band ? s.rollingCi[i] || 0 : 0;
+    lo = Math.min(lo, v - c); hi = Math.max(hi, v + c);
+  });
+  if (!Number.isFinite(first)) { host.innerHTML = `<div class="empty">Zu kurze Zeitreihe für ${window}-Jahres-Trends.</div>`; return; }
+  const x0 = years[first], x1 = years[years.length - 1];
+  const X = (yr) => m.l + ((yr - x0) / (x1 - x0)) * iw;
+  const pad = (hi - lo) * 0.06;
+  lo -= pad; hi += pad;
+  const Y = (v) => m.t + (1 - (v - lo) / (hi - lo)) * ih;
+  const grid = el("g", { class: "grid" }, svg);
+  const axis = el("g", { class: "axis" }, svg);
+  for (const t of ticks(lo, hi, 6)) {
+    el("line", { x1: m.l, x2: W - m.r, y1: Y(t), y2: Y(t) }, grid);
+    el("text", { x: m.l - 6, y: Y(t) + 3.5, "text-anchor": "end" }, axis).textContent = fmt(t, 2, false);
+  }
+  for (const t of ticks(x0, x1, Math.max(4, Math.round(iw / 90)))) el("text", { x: X(t), y: H - 8, "text-anchor": "middle" }, axis).textContent = t;
+  el("line", { class: "zero", x1: m.l, x2: W - m.r, y1: Y(0), y2: Y(0) }, svg);
+  const yt = el("text", { class: "axis-title", x: 12, y: m.t + ih / 2, transform: `rotate(-90 12 ${m.t + ih / 2})`, "text-anchor": "middle" }, svg);
+  yt.textContent = `${window}-Jahres-Trend (°C/Dekade)`;
+  const pathOf = (vals) => {
+    let d = "", pen = false;
+    vals.forEach((v, i) => { if (v == null || i < first) { pen = false; return; } d += `${pen ? "L" : "M"}${X(years[i]).toFixed(1)},${Y(v).toFixed(1)}`; pen = true; });
+    return d;
+  };
+  const labels = [];
+  for (const s of series) {
+    if (band) {
+      let up = "", down = [];
+      s.rolling.forEach((v, i) => {
+        const c = s.rollingCi[i];
+        if (v == null || c == null || i < first) return;
+        up += `${up ? "L" : "M"}${X(years[i]).toFixed(1)},${Y(v + c).toFixed(1)}`;
+        down.unshift(`L${X(years[i]).toFixed(1)},${Y(v - c).toFixed(1)}`);
+      });
+      if (up) el("path", { d: up + down.join("") + "Z", fill: s.color, "fill-opacity": 0.13, stroke: "none" }, svg);
+    }
+    el("path", { d: pathOf(s.rolling), fill: "none", stroke: s.color, "stroke-width": 2.25, "stroke-linejoin": "round" }, svg);
+    let li = -1;
+    s.rolling.forEach((v, i) => { if (v != null) li = i; });
+    if (li >= 0 && series.length <= 4) labels.push({ y: Y(s.rolling[li]), name: s.name, v: s.rolling[li], color: s.color });
+  }
+  if (global != null) {
+    el("line", { x1: m.l, x2: W - m.r, y1: Y(global), y2: Y(global), stroke: "#a9b6c7", "stroke-dasharray": "2 4", "stroke-opacity": 0.5 }, svg);
+  }
+  labels.sort((a, b) => a.y - b.y);
+  for (let i = 1; i < labels.length; i++) if (labels[i].y - labels[i - 1].y < 26) labels[i].y = labels[i - 1].y + 26;
+  for (const l of labels) {
+    el("text", { class: "label", x: W - m.r + 8, y: l.y + 3 }, svg).textContent = truncate(l.name, 15);
+    el("text", { class: "axis", x: W - m.r + 8, y: l.y + 15 }, svg).textContent = `${fmt(l.v, 2)} °C/Dek.`;
+  }
+  const cross = el("line", { class: "crosshair", y1: m.t, y2: m.t + ih, visibility: "hidden" }, svg);
+  const tip = makeTip(host);
+  const hit = el("rect", { x: m.l, y: m.t, width: iw, height: ih, fill: "transparent" }, svg);
+  hit.addEventListener("mousemove", (ev) => {
+    const rect = svg.getBoundingClientRect();
+    const px = ((ev.clientX - rect.left) / rect.width) * W;
+    const yr = Math.round(x0 + ((px - m.l) / iw) * (x1 - x0));
+    const i = years.indexOf(Math.max(x0, Math.min(x1, yr)));
+    if (i < 0) return;
+    cross.setAttribute("x1", X(years[i])); cross.setAttribute("x2", X(years[i])); cross.setAttribute("visibility", "visible");
+    const rows = series.map((s) => `<div class="t-row"><i style="background:${s.color}"></i><span>${escapeHtml(truncate(s.name, 22))}</span><b>${fmt(s.rolling[i], 2)} ± ${fmt(s.rollingCi[i], 2, false)}</b></div>`).join("");
+    tip.show(`<div class="t-head">${years[i] - window + 1}–${years[i]} · °C/Dekade</div>${rows}`, (X(years[i]) / W) * rect.width, ev.clientY - rect.top);
+  });
+  hit.addEventListener("mouseleave", () => { tip.hide(); cross.setAttribute("visibility", "hidden"); });
+}
+
+const PERIOD_COLORS = ["#8fb8d8", "#f4a582", "#d6604d", "#a50f15"];
+
+/** Shift of the standardised anomaly distribution, one curve per period. */
+export function distributionChart(container, data) {
+  const { bins, periods } = data;
+  const m = { l: 44, r: 16, t: 10, b: 30 };
+  const { svg, W, H, iw, ih } = frame(container, m);
+  const centers = bins.slice(0, -1).map((b, i) => (b + bins[i + 1]) / 2);
+  let hi = 0, zMin = -4, zMax = 4;
+  for (const p of periods) p.density.forEach((d, i) => {
+    hi = Math.max(hi, d || 0);
+    if (d > 0.002) { zMin = Math.min(zMin, centers[i] - 0.5); zMax = Math.max(zMax, centers[i] + 0.5); }
+  });
+  hi *= 1.08;
+  zMin = Math.max(bins[0], Math.floor(zMin));
+  zMax = Math.min(bins[bins.length - 1], Math.ceil(zMax));
+  const X = (z) => m.l + ((Math.max(zMin, Math.min(zMax, z)) - zMin) / (zMax - zMin)) * iw;
+  const Y = (v) => m.t + (1 - v / hi) * ih;
+  const axis = el("g", { class: "axis" }, svg);
+  for (const [a, b, label] of [[2, 3, "selten (> 2σ)"], [3, zMax, "extrem (> 3σ)"]]) {
+    el("rect", { x: X(a), y: m.t, width: X(b) - X(a), height: ih, fill: a === 3 ? "rgba(178,24,43,0.12)" : "rgba(214,96,77,0.07)" }, svg);
+    el("text", { class: "axis", x: X(a) + 4, y: m.t + (a === 3 ? 26 : 12) }, svg).textContent = label;
+  }
+  const step = zMax - zMin > 12 ? 2 : 1;
+  for (let z = Math.ceil(zMin / step) * step; z <= zMax; z += step) {
+    el("line", { x1: X(z), x2: X(z), y1: m.t, y2: m.t + ih, stroke: z === 0 ? "#56677e" : "rgba(255,255,255,0.06)" }, svg);
+    el("text", { x: X(z), y: H - 12, "text-anchor": "middle" }, axis).textContent = z === 0 ? "0" : `${z > 0 ? "+" : "−"}${Math.abs(z)}σ`;
+  }
+  el("text", { class: "axis-title", x: m.l + iw / 2, y: H, "text-anchor": "middle" }, svg).textContent = "Anomalie in Vielfachen der Jahr-zu-Jahr-Schwankung (σ) der Referenzperiode";
+  periods.forEach((p, k) => {
+    const color = PERIOD_COLORS[Math.min(k, PERIOD_COLORS.length - 1)];
+    let d = "";
+    let first = true;
+    p.density.forEach((v, i) => {
+      if (centers[i] < zMin || centers[i] > zMax) return;
+      d += `${first ? "M" : "L"}${X(centers[i]).toFixed(1)},${Y(v || 0).toFixed(1)}`;
+      first = false;
+    });
+    el("path", { d: d + `L${X(zMax)},${Y(0)}L${X(zMin)},${Y(0)}Z`, fill: color, "fill-opacity": 0.1, stroke: "none" }, svg);
+    el("path", { d, fill: "none", stroke: color, "stroke-width": k === 0 ? 1.5 : 2.25, "stroke-dasharray": k === 0 ? "5 3" : "none" }, svg);
+  });
+  el("line", { x1: m.l, x2: m.l + iw, y1: Y(0), y2: Y(0), stroke: "#56677e" }, svg);
+  return PERIOD_COLORS;
+}

@@ -71,7 +71,7 @@ a { color: var(--accent); }
 .layout {
   height: calc(100% - 52px);
   display: grid;
-  grid-template-columns: 1fr var(--sidebar-w);
+  grid-template-columns: minmax(0, 1fr) var(--sidebar-w);
   grid-template-rows: 1fr var(--analysis-h);
   grid-template-areas: "map side" "analysis side";
 }
@@ -251,6 +251,11 @@ details.advanced[open] { display: flex; flex-direction: column; gap: 8px; }
 }
 .tabs button:hover { color: var(--text); }
 .tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+.ghost.small { padding: 3px 10px; font-size: 11.5px; flex: none; }
+.resize-handle { height: 6px; margin-top: -3px; cursor: ns-resize; flex: none; position: relative; z-index: 3; }
+.resize-handle::after { content: ""; position: absolute; left: 50%; top: 2px; width: 40px; height: 3px; border-radius: 2px; background: var(--line); transform: translateX(-50%); }
+.resize-handle:hover::after { background: var(--accent); }
+.toast.info { background: #13283f; border-color: #2a5480; color: #d7e9ff; }
 .analysis-meta { margin-left: auto; color: var(--muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .analysis-body { flex: 1; min-height: 0; overflow: auto; padding: 10px 14px 12px; position: relative; }
 .layout.analysis-collapsed .analysis-body { display: none; }

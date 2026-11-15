@@ -257,6 +257,8 @@ def region_weights(ds: GriddedDataset, region: Region) -> np.ndarray:
     cos_lat = np.cos(np.deg2rad(ds.lats))
     if region.bbox is not None:
         w, s, e, n = region.bbox
+        if 0 <= e - w < 1e-3 and n - s < 1e-3:  # a point: exactly the cell containing it
+            return _nearest_cell(ds, (s + n) / 2, (w + e) / 2)
         lat_frac = _overlap(ds.lats - half_lat, ds.lats + half_lat, s, n) / ds.lat_step
         lo, hi = ds.lons - half_lon, ds.lons + half_lon
         if w <= e:
@@ -606,6 +608,24 @@ def _running_mean(values: np.ndarray, window: int = 11) -> np.ndarray:
     return out
 
 
+ROLLING_WINDOW: int = 30
+
+
+def rolling_trend(years: np.ndarray, values: np.ndarray, window: int = ROLLING_WINDOW) -> tuple[np.ndarray, np.ndarray]:
+    """Trend (°C/decade) and its 95 % half-width over the ``window`` years ending in each year."""
+    slope = np.full(values.shape, np.nan)
+    half = np.full(values.shape, np.nan)
+    if values.size < window:
+        return slope, half
+    idx = np.arange(window - 1, values.size)
+    stack = np.stack([values[i - window + 1: i + 1] for i in idx], axis=1)  # (window, n)
+    x = np.arange(window, dtype=np.float64)
+    fit = ols_trend(x, stack, min_fraction=2 / 3)
+    slope[idx] = fit["slope"] * 10
+    half[idx] = fit["ci"] * 10
+    return slope, half
+
+
 def _series_stats(years: np.ndarray, values: np.ndarray, start_y: int, end_y: int,
                   base: tuple[int, int]) -> dict[str, Any]:
     sel = (years >= start_y) & (years <= end_y)
@@ -717,6 +737,9 @@ def region_series(ds: GriddedDataset, regions: Sequence[Region], start: Any = No
             info["coverage"] = _round_list(coverage, 2)
             info["running"] = _round_list(_running_mean(values), 3)
             info["monthly_trends"] = _monthly_trends(ds, weights, start_y, end_y)
+            roll, roll_ci = rolling_trend(years, values)
+            info["rolling_trend"] = _round_list(roll, 3)
+            info["rolling_ci"] = _round_list(roll_ci, 3)
         results.append(info)
     return {
         "years": [int(y) for y in years] if include_series else None,
@@ -725,6 +748,7 @@ def region_series(ds: GriddedDataset, regions: Sequence[Region], start: Any = No
         "season_label": season_spec(season)[0],
         "baseline": list(base),
         "global": {"trend": global_stats.get("trend"), "trend_ci": global_stats.get("trend_ci")},
+        "rolling_window": ROLLING_WINDOW,
         "regions": results,
     }
 
@@ -762,4 +786,70 @@ def zonal(ds: GriddedDataset, season: str = "annual", baseline: str | None = Non
         "lats": [float(v) for v in ds.lats],
         "values": _round_list(mean, 2),  # [year][lat] flattened
         "season_label": season_spec(season)[0],
+    }
+
+
+DIST_BINS = np.arange(-6.0, 12.0001, 0.25)
+
+
+def distribution(ds: GriddedDataset, region: Region, season: str = "JJA",
+                 baseline: str | None = None, periods: Sequence[tuple[int, int]] | None = None) -> dict[str, Any]:
+    """Shift of the local anomaly distribution (cf. Hansen, Sato & Ruedy 2012, PNAS 109, E2415).
+
+    Every cell-year of the region is standardised with the cell's own baseline
+    mean and year-to-year standard deviation (detrended within the baseline).
+    The histogram per period shows how often seasons that were ±1σ, ±2σ, ±3σ
+    rare in the baseline occur now (area-weighted).
+    """
+    years, grid = seasonal_grid(ds, season, None)
+    base = _baseline(baseline, ds) or tuple(ds.baseline)
+    weights = region_weights(ds, region)
+    idx = np.nonzero(weights)
+    w = weights[idx]
+    vals = grid[(slice(None),) + idx].astype(np.float64)  # (years, cells)
+    bsel = (years >= base[0]) & (years <= base[1])
+    bvals = vals[bsel]
+    bx = years[bsel].astype(np.float64)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        fit = ols_trend(bx, bvals, min_fraction=2 / 3)
+        resid = bvals - (fit["intercept"] + fit["slope"] * (bx[:, None] - fit["x_mean"]))
+        sigma = np.sqrt(np.nansum(resid**2, axis=0) / np.maximum(np.isfinite(resid).sum(axis=0) - 2, 1))
+        mean = np.nanmean(bvals, axis=0)
+    ok = np.isfinite(sigma) & (sigma > 0) & np.isfinite(mean)
+    z = (vals[:, ok] - mean[ok]) / sigma[ok]
+    w = w[ok]
+    last = int(years[-1])
+    if periods is None:
+        periods = [(base[0], base[1]), (1981, 2000), (2001, 2012), (2013, last)]
+    out_periods = []
+    for a, b in periods:
+        sel = (years >= a) & (years <= b)
+        if not sel.any() or not ok.any():
+            continue
+        zz = z[sel]
+        ww = np.broadcast_to(w, zz.shape)
+        m = np.isfinite(zz)
+        if m.sum() == 0:
+            continue
+        zc = np.clip(zz[m], DIST_BINS[0], DIST_BINS[-1] - 1e-9)
+        hist, _ = np.histogram(zc, bins=DIST_BINS, weights=ww[m])
+        total = ww[m].sum()
+        dens = hist / total / (DIST_BINS[1] - DIST_BINS[0])
+        out_periods.append({
+            "period": [a, min(b, last)],
+            "density": _round_list(dens, 4),
+            "mean": _num(np.average(zz[m], weights=ww[m]), 3),
+            "above2": _num(ww[m][zz[m] > 2].sum() / total, 4),
+            "above3": _num(ww[m][zz[m] > 3].sum() / total, 4),
+            "below_m2": _num(ww[m][zz[m] < -2].sum() / total, 4),
+        })
+    return {
+        "region": region.to_dict(),
+        "season": season,
+        "season_label": season_spec(season)[0],
+        "baseline": list(base),
+        "bins": [float(v) for v in DIST_BINS],
+        "cells": int(ok.sum()),
+        "periods": out_periods,
     }
