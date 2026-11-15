@@ -8,7 +8,8 @@ Mittelmeer vs. Antarktis vs. Südpazifik vs. NRW.
 
 Start: `python3 app.py` → <http://127.0.0.1:8000/explorer/>. Die bisherige Seite unter `/`
 bleibt unverändert nutzbar (oben links gibt es jetzt einen Link „🌍 Global Explorer“).
-Beim ersten Aufruf lädt der Server den GISTEMP-Datensatz (~26 MB) nach `data/cache/gistemp/`.
+Beim ersten Aufruf lädt der Server den GISTEMP-Datensatz (~26 MB) nach `data/cache/gistemp/`,
+beim ersten Umschalten auf Niederschlag GPCP (~21 MB, ca. 1 Minute) nach `data/cache/gpcp/`.
 
 ---
 
@@ -47,9 +48,14 @@ saubere Tests für Quellen und Region-Auswertung.
 
 ## 2. Idee des Global Explorers
 
-1. **Ein Datensatz für die ganze Welt** – NASA GISTEMP v4: monatliche Anomalien der
-   Oberflächentemperatur auf 2°×2°-Gitter seit 1880 (Land: GHCNv4-Stationen, Meer: ERSSTv5).
-   Ein Download, danach ist jede Auswertung lokal und schnell (Karte ~0,2 s, Regionen ~0,1 s).
+1. **Globale Gitterdatensätze statt Einzelabfragen** – umschaltbar oben in der Leiste:
+   * **Temperatur: NASA GISTEMP v4** – monatliche Anomalien der Oberflächentemperatur,
+     2°×2°, seit 1880 (Land: GHCNv4-Stationen, Meer: ERSSTv5).
+   * **Niederschlag: GPCP v2.3** – monatlicher Niederschlag, 2,5°×2,5°, seit 1979
+     (Satelliten + Regenmesser), als Anomalie zum Klimamittel 1991–2020; zusätzlich
+     relative Trends in % pro Dekade.
+
+   Je ein Download, danach ist jede Auswertung lokal und schnell (Karte ~0,2 s, Regionen ~0,1 s).
 2. **Karte zuerst** – ein Globus, auf dem die Veränderung als farbiges Overlay liegt.
 3. **Beliebige Regionen vergleichen** – vordefiniert (26 Regionen inkl. Mittelmeer, Arktis,
    Antarktis, Südpazifik, Niño-3.4, NRW …), per Suche (Ort/Land über Nominatim), als
@@ -108,20 +114,22 @@ verstellbare Höhe des Analysebereichs, Handy-Layout.
 * Extreme: jede Zelle-Jahr standardisiert mit eigenem Mittel/σ der Referenzperiode;
   flächengewichtete Histogramme je Zeitraum.
 
-Validierung: globaler Trend 1975–2025 = **+0,21 °C/Dekade** (Literatur ≈ 0,2), Arktis ≈ 3,2×
-global (arktische Verstärkung, Literatur 3–4× seit 1979), globale Jahresanomalie 2025 ≈ +1,2 °C
-ggü. 1951–1980 – konsistent mit den NASA-Veröffentlichungen.
+Validierung (1979–2025, Jahresmittel): globaler Trend **+0,21 ± 0,04 °C/Dekade** (Literatur
+≈ 0,2), Arktis **+0,71 °C/Dekade = 3,4× global** (arktische Verstärkung, Literatur 3–4× seit
+1979), Mittelmeer 2,1×, NRW 2,4×, Antarktis 0,7×, Südpazifik 0,5×; globale Jahresanomalie 2025
+≈ +1,2 °C ggü. 1951–1980 – konsistent mit den NASA-Veröffentlichungen. Niederschlag: globaler
+Trend ≈ 0, Arktis signifikant feuchter (+4 %/Dekade).
 
 ## 5. Dateien
 
 | Datei | Inhalt |
 |---|---|
-| `global_data.py` | Download/Laden von GISTEMP (netCDF3 über scipy, kein neues Paket) |
+| `global_data.py` | Download/Laden von GISTEMP (netCDF3) und GPCP (netCDF3 über den THREDDS-Subset-Dienst, in Zehnjahresstücken) – nur scipy, kein neues Paket |
 | `global_analysis.py` | Regionen, Saisonmittel, Trends, Kartenebenen, Statistik, Ranking, Hovmöller, Extreme |
-| `global_api.py` | `GET /api/global/{meta,layer,frames,regions,cell,ranking,zonal,distribution}` |
+| `global_api.py` | `GET /api/global/{meta,layer,frames,regions,cell,ranking,zonal,distribution}`, Datensatz über `?ds=gistemp|gpcp` |
 | `explorer/` | Oberfläche (MapLibre-Globus, Canvas-Overlay, SVG-Diagramme ohne weitere Bibliotheken) |
 | `static/vendor/` | MapLibre GL 6.18 (aus `map-widget/node_modules`), Natural-Earth-Küstenlinie |
-| `tests/test_global_analysis.py` | 22 Tests auf synthetischem Gitter mit bekannten Trends |
+| `tests/test_global_analysis.py` | 25 Tests auf synthetischen Gittern mit bekannten Trends (Temperatur & Niederschlag) |
 
 `app.py` hat nur zwei Ergänzungen (Weiterleitung der `/api/global/`-Anfragen, Redirect
 `/explorer` → `/explorer/`).
@@ -131,9 +139,10 @@ ggü. 1951–1980 – konsistent mit den NASA-Veröffentlichungen.
 * **Auflösung 2°** (~220 km): NRW besteht aus 6 Teilzellen. Für Städte/kleine Regionen ist die
   Stationsanalyse besser – beides ergänzt sich (Idee: Klick im Explorer → „Stationen hier
   auswerten“).
-* **Nur Temperatur.** Weitere globale Raster wären z. B. GPCP-Niederschlag, NSIDC-Meereis,
-  ERA5-Monatsmittel (Copernicus, braucht kostenlosen Schlüssel) oder Berkeley Earth (1°,
-  ~450 MB). `GriddedDataset` ist dafür vorbereitet; netCDF4/HDF5-Dateien bräuchten `h5py`.
+* **Weitere Variablen** lassen sich über `DATASETS` in `global_data.py` ergänzen, z. B.
+  NSIDC-Meereis, ERA5-Monatsmittel (Copernicus, kostenloser Schlüssel) oder Berkeley Earth
+  (1°, ~450 MB). Der THREDDS-Trick (netCDF3 per Subset-Dienst) funktioniert für viele
+  NOAA-PSL-Datensätze; direkte netCDF4/HDF5-Dateien bräuchten `h5py`.
 * **Frühe Jahre** haben in Polarregionen, Afrika und Südmeeren wenige Messungen – die
   Flächenabdeckung wird angezeigt, die Statistik ignoriert Jahre mit zu geringer Abdeckung.
 * GISTEMP glättet über bis zu 1200 km → kleinere Schwankungen (σ) als an Einzelstationen;

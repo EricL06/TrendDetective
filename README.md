@@ -21,12 +21,13 @@ downloaded for it.
 
 ## Global Explorer (globale Trends vergleichen)
 
-Open http://127.0.0.1:8000/explorer/ for a globe-first view built on the NASA GISTEMP v4
-temperature grid (2°, monthly since 1880): maps of warming trend, anomaly, acceleration,
+Open http://127.0.0.1:8000/explorer/ for a globe-first view built on gridded data – the NASA
+GISTEMP v4 temperature grid (2°, monthly since 1880) and GPCP v2.3 precipitation (2.5°, since
+1979): maps of warming trend, anomaly, acceleration,
 signal-to-noise and spatial gradient, a year-by-year animation, and side-by-side comparison
 of any regions (presets such as Mediterranean, Antarctica, South Pacific, NRW; place search;
-drawn rectangles; single grid cells). The dataset (~26 MB) is downloaded on first use into
-`data/cache/gistemp/`. Concept, methods and an analysis of the station-based tool:
+drawn rectangles; single grid cells). Each dataset (~21–26 MB) is downloaded on first use into
+`data/cache/`. Concept, methods and an analysis of the station-based tool:
 [docs/global-explorer.md](docs/global-explorer.md).
 
 ```bash
