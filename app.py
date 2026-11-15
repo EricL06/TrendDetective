@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import area_analysis
+import global_api
 import station_coverage
 import interface
 import places
@@ -138,6 +139,13 @@ class WebAppHandler(SimpleHTTPRequestHandler):
             return
 
         url = urlsplit(self.path)
+        if global_api.handle_get(self, url.path, url.query):
+            return
+        if url.path in ("/explorer", "/globe"):
+            self.send_response(301)
+            self.send_header("Location", "/explorer/")
+            self.end_headers()
+            return
         if url.path == "/api/places":
             query = parse_qs(url.query).get("q", [""])[0]
             try:
