@@ -662,18 +662,23 @@ def _evaluate_variable(
                 "type": "Feature",
                 "geometry": {"type": "Point", "coordinates": [longitude, latitude]},
                 "properties": {
-                    "kind": "Measuring station",
-                    "topic": topic_key,
-                    "source": first.get("source", "NOAA"),
-                    "station": station_id,
-                    "name": first.get("name"),
-                    "elevation_m": first.get("elevation"),
-                    "intervals": len(values),
-                    "mean": round(sum(values) / len(values), 3),
-                    "slope_per_interval": trend.get("slope"),
-                    "slope_per_decade": trend.get("slope_per_decade"),
-                    "p_value": trend.get("p_value"),
-                    "significant": trend.get("significant"),
+                    "Station": f"{first.get('name') or station_id} ({first.get('source', 'NOAA')} {station_id})",
+                    **(
+                        {"Elevation": f"{first.get('elevation'):.0f} m"}
+                        if isinstance(first.get("elevation"), (int, float))
+                        else {}
+                    ),
+                    **{
+                        key: value
+                        for key, value in task.popup_properties(
+                            topic_key,
+                            round(sum(values) / len(values), 3),
+                            first.get("unit"),
+                            len(values),
+                            {"Linear Regression": trend},
+                        ).items()
+                        if key != "Result"
+                    },
                     "color": _station_colour(trend),
                 },
             }
@@ -771,12 +776,15 @@ def process_region_request(user_request: Any, region: Region) -> dict[str, Any]:
                         "type": "Feature",
                         "geometry": _station_hull(stations, region),
                         "properties": {
-                            "topic": result_key,
-                            "region": region.name,
-                            "stations": result["station_count"],
-                            "mean": result["mean"],
-                            "slope_per_interval": trend.get("slope"),
-                            "slope_per_decade": trend.get("slope_per_decade"),
+                            **task.popup_properties(
+                                f"{result_key} · {region.name}",
+                                result["mean"],
+                                result.get("unit"),
+                                len(result["values"]),
+                                result["tools"],
+                                result.get("events"),
+                            ),
+                            "Stations": result["station_count"],
                             "color": _station_colour(trend) if trend else _FLAT,
                         },
                     }

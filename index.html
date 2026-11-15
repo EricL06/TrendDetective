@@ -1094,9 +1094,12 @@
                 title.textContent = group;
                 listContainer.appendChild(title);
                 // Station data first, then model / satellite / marine; daily before hourly.
+                const FEATURED = ['temperature', 'precipitation', 'snowfall', 'snow_depth', 'wind_speed'];
                 const rank = (t) => {
                     const d = topicDetails[t] || {};
-                    return (d.kind === 'station' ? 0 : d.kind === 'model' ? 1 : 2) * 10 + (d.hourly ? 1 : 0);
+                    const featured = FEATURED.includes(t) ? 0 : 1;
+                    const coarse = /_(monthly|annual)$/.test(t) ? 1 : 0;
+                    return featured * 100 + (d.kind === 'station' ? 0 : d.kind === 'model' ? 1 : 2) * 10 + (d.hourly ? 2 : coarse);
                 };
                 for (const topic of groups.get(group).sort((a, b) => rank(a) - rank(b) || topicLabel(a).localeCompare(topicLabel(b)))) {
                     const d = topicDetails[topic] || {};

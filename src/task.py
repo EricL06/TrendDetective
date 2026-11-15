@@ -942,6 +942,52 @@ def trend_colour(tool_results: dict[str, Any]) -> str:
     return TREND_COLOURS["flat"]
 
 
+def _number(value: float | None, unit: str | None, digits: int = 3) -> str:
+    if value is None:
+        return "–"
+    text = f"{value:.{digits}g}" if abs(value) < 1000 else f"{value:.0f}"
+    return f"{text} {unit}" if unit else text
+
+
+def readable_trend(tool_results: dict[str, Any], unit: str | None) -> str | None:
+    """E.g. ``+1.5 °C per decade (not significant, p 0.24)``; ``None`` without a slope tool."""
+    for name in ("Linear Regression", "Sen's Slope"):
+        result = tool_results.get(name) or {}
+        decade = result.get("slope_per_decade")
+        if result.get("available", True) and decade is not None:
+            sign = "+" if decade > 0 else ""
+            significance = "significant" if result.get("significant") else "not significant"
+            p_value = result.get("p_value")
+            p_text = f", p {p_value:.3g}" if isinstance(p_value, (int, float)) else ""
+            return f"{sign}{_number(decade, unit, 2)} per decade ({significance}{p_text})"
+    return None
+
+
+def popup_properties(
+    title: str,
+    mean_value: float | None,
+    unit: str | None,
+    count: int,
+    tool_results: dict[str, Any],
+    found_events: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Readable properties of a result on the map (the widget lists them in its popup)."""
+    properties: dict[str, Any] = {"Result": title, "Mean": _number(mean_value, unit), "Intervals": count}
+    trend = readable_trend(tool_results, unit)
+    if trend:
+        properties["Trend"] = trend
+    mann_kendall = tool_results.get("Mann-Kendall") or {}
+    if mann_kendall.get("available"):
+        properties["Mann-Kendall"] = f"{mann_kendall['trend']} (p {mann_kendall['p_value']:.3g})"
+    change = tool_results.get("Change Point") or {}
+    if change.get("available") and change.get("significant"):
+        properties["Shift"] = f"{_number(change.get('shift'), unit)} around {change.get('date', change.get('x_after'))}"
+    if found_events:
+        top = found_events[0]
+        properties["Most notable"] = f"{top['title']} on {top['date']}: {_number(top['value'], unit)}"
+    return properties
+
+
 def run_series_tools(
     indices: list[int],
     values: list[float],
@@ -1067,24 +1113,10 @@ def process_user_request(user_request: Any) -> dict[str, Any]:
                 "events": _safe_events(records, variables, unit),
             }
 
-            properties: dict[str, Any] = {
-                "topic": result_key,
-                "mean": mean_value,
-                "samples": sample_count,
-                "color": trend_colour(tool_results),
-            }
-            regression_result = tool_results.get("Linear Regression")
-            if regression_result is not None:
-                properties["slope"] = regression_result["slope"]
-                properties["intercept"] = regression_result["intercept"]
-            ttest_result = tool_results.get("t-Test")
-            if ttest_result is not None and ttest_result.get("available"):
-                properties["t_statistic"] = ttest_result["t_statistic"]
-                properties["p_value"] = ttest_result["p_value"]
-            mann_kendall_result = tool_results.get("Mann-Kendall")
-            if mann_kendall_result is not None and mann_kendall_result.get("available"):
-                properties["mann_kendall_trend"] = mann_kendall_result["trend"]
-                properties["mann_kendall_p_value"] = mann_kendall_result["p_value"]
+            properties = popup_properties(
+                result_key, mean_value, unit, sample_count, tool_results, topic_results[result_key]["events"]
+            )
+            properties["color"] = trend_colour(tool_results)
 
             if isinstance(user_request.area, dict) and isinstance(
                 user_request.area.get("geometry"), dict
