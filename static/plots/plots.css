@@ -951,9 +951,9 @@ button.tp-avail-btn:hover { background: #f4f4f1; }
     white-space: normal;
     overflow-wrap: break-word;
     pointer-events: none;
-    visibility: hidden;
-    opacity: 0;
-    transition: opacity 0.1s;
+    /* Not just invisible but absent: a hidden 280 px box next to a "?" at the right edge
+       would still widen the page and make it scroll sideways. */
+    display: none;
 }
 .tp-help.tp-help-below::after {
     bottom: auto;
@@ -961,8 +961,7 @@ button.tp-avail-btn:hover { background: #f4f4f1; }
 }
 .tp-help:hover::after,
 .tp-help:focus::after {
-    visibility: visible;
-    opacity: 1;
+    display: block;
 }
 
 /* ---- Phone widths ---- */
