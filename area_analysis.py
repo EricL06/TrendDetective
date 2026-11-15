@@ -36,7 +36,6 @@ from typing import Any
 
 import api_wrapper
 import noaa_api
-import plot_analysis
 import station_sources
 from src import task
 from station_sources import Station
@@ -451,11 +450,6 @@ def _fetch_all_records(
     return records
 
 
-def _bin_index(label: str, start_date: date, step_days: float) -> int:
-    day = datetime.strptime(label, "%d.%m.%Y").date()
-    return round((day - start_date).days / step_days)
-
-
 def _area_series(
     station_bins: dict[str, dict[int, float]],
 ) -> dict[int, float]:
@@ -602,6 +596,9 @@ def _evaluate_topic(
         ), [])]
 
     records = _fetch_all_records(client, topic_key, stations, clients, start_date, end_date)
+    # Same units as a point request: precipitation totals as mm/day, rain-day
+    # counts as % of days, DAPR day counts folded into MDPR.
+    records = task.precipitation_as_density(records)
     evaluated = []
     for result_key, variable_records in task.split_by_variable(topic_key, records):
         result, features = _evaluate_variable(
@@ -636,12 +633,15 @@ def _evaluate_variable(
     station_bins: dict[str, dict[int, float]] = {}
     station_features: list[dict[str, Any]] = []
     for station_id, station_records in sorted(by_station.items()):
-        labels, values = task._bin_records(station_records, start_date, end_date, interval_length)
+        indices, labels, values = task.bin_records_indexed(
+            station_records, start_date, end_date, interval_length
+        )
         if len(values) < 3:
             continue
-        indices = [_bin_index(label, start_date, step_days) for label in labels]
         station_bins[station_id] = dict(zip(indices, values))
-        trend = plot_analysis.run_tools(indices, values, ["Linear Regression"])["Linear Regression"]
+        trend = task.run_series_tools(indices, values, ["Linear Regression"], interval_length)[
+            "Linear Regression"
+        ]
         first = station_records[0]
         try:
             latitude, longitude = float(first["latitude"]), float(first["longitude"])
@@ -663,6 +663,7 @@ def _evaluate_variable(
                     "intervals": len(values),
                     "mean": round(sum(values) / len(values), 3),
                     "slope_per_interval": trend.get("slope"),
+                    "slope_per_decade": trend.get("slope_per_decade"),
                     "p_value": trend.get("p_value"),
                     "significant": trend.get("significant"),
                     "color": _station_colour(trend),
@@ -695,7 +696,7 @@ def _evaluate_variable(
             "unit": units.pop() if len(units) == 1 else None,
             "station_count": len(station_bins),
             "sources": _source_counts(by_station, station_bins),
-            "tools": plot_analysis.run_tools(indices, values, tools) if tools else {},
+            "tools": task.run_series_tools(indices, values, tools, interval_length, labels),
         }
     )
     del result["error"]
@@ -752,6 +753,7 @@ def process_region_request(user_request: Any, region: Region) -> dict[str, Any]:
                             "stations": result["station_count"],
                             "mean": result["mean"],
                             "slope_per_interval": trend.get("slope"),
+                            "slope_per_decade": trend.get("slope_per_decade"),
                             "color": _station_colour(trend) if trend else _FLAT,
                         },
                     }

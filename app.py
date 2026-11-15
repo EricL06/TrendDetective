@@ -198,8 +198,12 @@ class WebAppHandler(SimpleHTTPRequestHandler):
             if "groups" in body:
                 result = plot_analysis.analyze_groups(body["groups"], body.get("tools"))
             else:
+                season = body.get("season_length")
                 result = plot_analysis.analyze_series(
-                    body.get("x", []), body.get("values", []), body.get("tools")
+                    body.get("x", []),
+                    body.get("values", []),
+                    body.get("tools"),
+                    float(season) if isinstance(season, (int, float)) and not isinstance(season, bool) else None,
                 )
         except (json.JSONDecodeError, ValueError) as exc:
             self._send_json(400, {"error": str(exc)})
