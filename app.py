@@ -136,7 +136,14 @@ class WebAppHandler(SimpleHTTPRequestHandler):
         app_interface = get_interface()
 
         if self.path == "/api/topics":
-            self._send_json(200, {"topics": app_interface.get_sorted_topics()})
+            self._send_json(
+                200,
+                {
+                    "topics": app_interface.get_sorted_topics(),
+                    # Readable names, groups and sources for the topic list.
+                    "details": interface.api_wrapper.get_topic_details(),
+                },
+            )
             return
 
         url = urlsplit(self.path)
@@ -262,7 +269,7 @@ class WebAppHandler(SimpleHTTPRequestHandler):
         try:
             user_request = app_interface.prepare_apply()
         except (ValueError, AssertionError) as exc:
-            self.send_error(400, str(exc))
+            self._send_json(400, {"error": str(exc)})
             return
         topics = [name for name, checked in user_request.topics.items() if checked]
 
@@ -366,7 +373,7 @@ class WebAppHandler(SimpleHTTPRequestHandler):
                             area=area,
                         )
                 except (json.JSONDecodeError, ValueError, TypeError, AssertionError) as exc:
-                    self.send_error(400, str(exc))
+                    self._send_json(400, {"error": str(exc)})
                     return
 
             if button_id == "apply/stream":
@@ -379,7 +386,7 @@ class WebAppHandler(SimpleHTTPRequestHandler):
                 self.send_error(404, f"Button '{button_id}' not found")
                 return
             except (ValueError, AssertionError) as exc:
-                self.send_error(400, str(exc))
+                self._send_json(400, {"error": str(exc)})
                 return
 
             self.send_response(204)

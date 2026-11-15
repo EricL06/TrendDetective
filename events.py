@@ -33,7 +33,7 @@ from typing import Any, Iterable, Sequence
 
 import numpy as np
 
-MIN_CLIMATE_YEARS: int = 3
+MIN_CLIMATE_YEARS: int = 2
 """Years needed before the normal is taken per time of year."""
 
 WINDOW_DAYS: int = 15

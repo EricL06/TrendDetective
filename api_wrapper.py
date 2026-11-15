@@ -294,8 +294,61 @@ def get_all_topics_list() -> list[str]:
     return all_topic_names
 
 
+TOPIC_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Marine", ("marine_",)),
+    ("Soil", ("soil_",)),
+    ("Ice", ("ice_",)),
+    ("Snow", ("snow",)),
+    ("Precipitation", ("precipitation", "evaporation", "evapotranspiration", "water_temperature", "weather_")),
+    ("Temperature", ("temperature", "degree_days", "dew_point", "wet_bulb")),
+    ("Wind", ("wind",)),
+    ("Humidity, clouds & sun", ("humidity", "cloud", "sunshine", "solar", "visibility")),
+    ("Pressure", ("pressure",)),
+)
+"""Groups of the topic list on the website: first matching key fragment wins."""
+
+
+def _topic_group(key: str) -> str:
+    for group, fragments in TOPIC_GROUPS:
+        if any(fragment in key for fragment in fragments):
+            return group
+    return "Other"
+
+
+def get_topic_details() -> dict[str, dict[str, Any]]:
+    """Readable name, description, group and sources of every topic, for the website.
+
+    ``kind`` is ``"model"`` for ERA5 reanalysis topics, ``"satellite"`` for
+    satellite data, ``"marine"`` for ship/buoy reports and ``"station"`` else.
+    """
+    details: dict[str, dict[str, Any]] = {}
+    for provider_key, client_type in _PROVIDERS.items():
+        source = PROVIDER_NAMES.get(provider_key, provider_key)
+        for topic_name, definition in client_type.list_topics():
+            entry = details.get(topic_name)
+            if entry is None:
+                kind = (
+                    "model" if topic_name.endswith("_era5")
+                    else "satellite" if topic_name.endswith("_satellite")
+                    else "marine" if topic_name.startswith("marine_")
+                    else "station"
+                )
+                entry = details[topic_name] = {
+                    "label": str(getattr(definition, "label", topic_name)),
+                    "description": str(getattr(definition, "description", "")),
+                    "group": _topic_group(topic_name),
+                    "kind": kind,
+                    "hourly": getattr(definition, "dataset", "") == "global-hourly",
+                    "sources": [],
+                }
+            if source not in entry["sources"]:
+                entry["sources"].append(source)
+    return details
+
+
 __all__ = [
     "PROVIDER_NAMES",
+    "get_topic_details",
     "PointDataRequest",
     "fetch_data_single_topic_nearest_station",
     "fetch_data_single_topic_single_coordinate",
