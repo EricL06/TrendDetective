@@ -329,7 +329,7 @@ async function switchDataset(key) {
   if (state.playing) togglePlay();
   let meta;
   try {
-    loading(true, "Lade Datensatz …");
+    loading(true, key === "gpcp" ? "Lade Niederschlagsdaten (beim ersten Mal ~20 MB, bis ca. 1 Min.) …" : "Lade Datensatz …");
     meta = await getJSON("meta", { ds: key });
   } catch (err) {
     toast(err.message);

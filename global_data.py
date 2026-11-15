@@ -296,6 +296,7 @@ DATASETS: dict[str, dict] = {
     "gpcp": {"label": "Niederschlag", "loader": _load_gpcp_cached},
 }
 _loaded: dict[str, GriddedDataset] = {}
+_key_locks: dict[str, threading.Lock] = {}
 _override: GriddedDataset | None = None
 
 
@@ -305,7 +306,9 @@ def get_dataset(key: str = "gistemp") -> GriddedDataset:
         return _override
     if key not in DATASETS:
         raise KeyError(key)
-    with _lock:
+    with _lock:  # one lock per dataset, so a long download does not block the others
+        key_lock = _key_locks.setdefault(key, threading.Lock())
+    with key_lock:
         if key not in _loaded:
             _loaded[key] = DATASETS[key]["loader"]()
         return _loaded[key]
