@@ -1,0 +1,142 @@
+# Global Explorer – Analyse & Konzept (Branch `global-explorer`)
+
+Dieser Branch ist ein **Gegenentwurf** zur bisherigen stationsbasierten Analyse: Statt für
+einen Punkt oder eine Region Messwerte bei Wetterdiensten abzufragen, arbeitet der Global
+Explorer mit einem **globalen, gerasterten Datensatz** und kann deshalb jede Region der Welt
+in Sekundenbruchteilen auswerten und mit jeder anderen vergleichen – zum Beispiel
+Mittelmeer vs. Antarktis vs. Südpazifik vs. NRW.
+
+Start: `python3 app.py` → <http://127.0.0.1:8000/explorer/>. Die bisherige Seite unter `/`
+bleibt unverändert nutzbar (oben links gibt es jetzt einen Link „🌍 Global Explorer“).
+Beim ersten Aufruf lädt der Server den GISTEMP-Datensatz (~26 MB) nach `data/cache/gistemp/`.
+
+---
+
+## 1. Analyse des bisherigen Projekts (Stand `main` @ ba21327)
+
+**Architektur.** `app.py` (Standardbibliothek-HTTP-Server) liefert `index.html` mit dem
+React/MapLibre-Karten-Widget (`map-widget/`) und dem Plot-Panel (`static/plots/plots.js`).
+„Apply“ streamt pro Thema Ergebnisse (`/api/buttons/apply/stream`, NDJSON). Ein Punkt geht
+über `src/task.py` (nächste Station), eine der 22 vordefinierten Regionen über
+`area_analysis.py` (bis 40 Stationen, Anomalien je Station gemittelt).
+
+**Datenquellen** (alle ohne Schlüssel): NOAA NCEI (weltweit, ~43 Themen inkl. stündlich und
+Marine), DWD (Deutschland), ECCC (Kanada), FMI (Finnland), Open-Meteo ERA5 (Modell, Punkt
+bzw. 3×3-Stichprobe einer Region), PolarWatch (Eisdicke ab 2021). Stationen mehrerer Quellen
+werden über WMO-/GHCN-IDs bzw. Position dedupliziert.
+
+**Analysen.** Lineare Regression, Mann-Kendall, Welch-t-Test (erste gegen zweite Hälfte);
+im Plot-Panel zusätzlich Ansichten „Timeline“, „Years overlaid“, „Period across years“,
+gleitendes Mittel, Anomalie, Analysefenster je Monat/Saison/Jahr, CSV-Export.
+`/api/coverage` zeigt, wann Stationen einer Auswahl Daten haben.
+
+**Stärken.** Echte Stationsmessungen mit hoher zeitlicher Auflösung (täglich/stündlich),
+viele Variablen (Niederschlag, Schnee, Wind, Meer), nachvollziehbare Herkunft jedes Werts,
+saubere Tests für Quellen und Region-Auswertung.
+
+**Grenzen in Bezug auf die Challenge** („globale Veränderungen darstellen und vergleichen“):
+
+| Thema | Beobachtung |
+|---|---|
+| Globaler Überblick | Es gibt keine Weltkarte der Veränderung – man sieht immer nur einen Punkt oder eine Region. |
+| Regionen | Nur Punkt oder 22 feste Boxen (überwiegend USA/Europa); keine freien Regionen, keine Ozeane/Pole als Ganzes. |
+| Vergleich | Regionen lassen sich nicht nebeneinander vergleichen; Ergebnisse sind Karten pro Thema. |
+| Geschwindigkeit | Mehrjährige Abfragen laufen live gegen NOAA & Co. (max. 3 parallele Anfragen, Timeouts, Marine besonders langsam). |
+| Methodik | Punkt-Regression ohne p-Wert und auf Indexachse (Lücken stauchen die Zeit, siehe Gap G8); keine Autokorrelations-Korrektur; Regionen mitteln Stationen ohne Flächengewichtung. |
+| Datenlage | Antarktis, Ozeane, Afrika haben kaum Stationen → genau dort, wo globale Vergleiche spannend sind, fehlen Daten. |
+
+## 2. Idee des Global Explorers
+
+1. **Ein Datensatz für die ganze Welt** – NASA GISTEMP v4: monatliche Anomalien der
+   Oberflächentemperatur auf 2°×2°-Gitter seit 1880 (Land: GHCNv4-Stationen, Meer: ERSSTv5).
+   Ein Download, danach ist jede Auswertung lokal und schnell (Karte ~0,2 s, Regionen ~0,1 s).
+2. **Karte zuerst** – ein Globus, auf dem die Veränderung als farbiges Overlay liegt.
+3. **Beliebige Regionen vergleichen** – vordefiniert (26 Regionen inkl. Mittelmeer, Arktis,
+   Antarktis, Südpazifik, Niño-3.4, NRW …), per Suche (Ort/Land über Nominatim), als
+   gezeichnetes Rechteck oder als einzelne Gitterzelle per Klick. Bis zu 8 gleichzeitig.
+4. **Wissenschaftliche Methodik, offen erklärt** (Dialog „Methodik“ in der App).
+
+## 3. Funktionen
+
+### Kartenebenen
+| Ebene | Bedeutung |
+|---|---|
+| Trend | OLS-Trend je Zelle in °C/Dekade; Punkte = nicht signifikant (p ≥ 0,05, AR(1)-korrigiert) |
+| Anomalie | Mittlere Abweichung im Zeitraum ggü. Referenzperiode |
+| Einzeljahr ▶ | Anomalie jedes Jahres, als Animation 1880 → heute |
+| Beschleunigung | Trend 2. Hälfte − Trend 1. Hälfte („zweite Ableitung“) |
+| Signal/Rauschen | Änderung im Zeitraum / Jahr-zu-Jahr-Schwankung |
+| Räuml. Gradient | Betrag des räumlichen Gradienten des Trendfelds (°C/Dekade pro 1000 km) |
+
+Einstellungen: Zeitraum (mit Schnellwahl), Jahr/Jahreszeit/Einzelmonat, Referenzperiode
+(1951–1980, 1961–1990, 1991–2020, 1880–1900 ≈ vorindustriell), Interpolation an/aus,
+Deckkraft, feste Farbskala, Globus/Karte. Hover zeigt den Wert jeder Zelle, Klick öffnet ein
+Popup mit Mini-Zeitreihe und Kennzahlen.
+
+**Interpolation ohne erfundene Daten:** Werte gehören zu Zellmittelpunkten; die Darstellung
+interpoliert bilinear zwischen den vier Nachbarn. Fehlen Nachbarn, wird nur über vorhandene
+Werte gemittelt und nicht in Datenlücken hinein extrapoliert. Leere Zellen bleiben leer.
+
+### Analyse-Tabs (unten)
+| Tab | Inhalt |
+|---|---|
+| Zeitreihe | Jahreswerte, 11-Jahres-Mittel, linearer Trend; Tooltip mit Flächenabdeckung |
+| Erwärmungstempo | gleitender 30-Jahres-Trend je Region mit 95-%-Band – zeigt, ob die Erwärmung schneller wird |
+| Wärmestreifen | „Warming Stripes“ aller Regionen auf gemeinsamer Farbskala |
+| Jahreszeiten | Trend je Kalendermonat mit Konfidenzintervall |
+| Extreme | Verschiebung der Verteilung standardisierter Anomalien (nach Hansen et al. 2012): Anteil > 2σ / > 3σ je Zeitraum |
+| Statistik | Kennzahlen, automatisch formulierte Kurzaussage, Tabelle (OLS ± KI, p, Theil-Sen, Mann-Kendall, Beschleunigung, S/N, Zeitpunkt des Hervortretens, wärmste Jahre, Fläche) |
+| Ranking | alle vordefinierten Regionen nach Trend, mit KI und Faktor ggü. global; Klick fügt hinzu |
+| Breitengrade | Hovmöller-Diagramm (Zonalmittel × Jahr) – zeigt z. B. die arktische Verstärkung |
+
+Weitere: CSV-Export der Regionszeitreihen, „Link teilen“ (kompletter Zustand in der URL),
+verstellbare Höhe des Analysebereichs, Handy-Layout.
+
+## 4. Methodik (Kurzfassung)
+
+* Jahres-/Saisonmittel aus Monatswerten; ein Jahr zählt, wenn ≥ ⅔ der Monate Daten haben.
+  Der laufende, noch unvollständige Zeitraum wird weggelassen; Winter (DJF) nutzt den
+  Dezember des Vorjahres.
+* Trend: kleinste Quadrate; Standardfehler und p-Wert mit effektiver Stichprobengröße
+  n_eff = n·(1−r₁)/(1+r₁) (Santer et al. 2000). Zellen brauchen ≥ ⅔ der Jahre und Daten in
+  jedem Drittel des Zeitraums.
+* Robust: Theil-Sen-Steigung, Mann-Kendall-Test (scipy).
+* Regionen: Mittel mit Gewicht cos(Breite) × Anteil der Zelle in der Region (auch über die
+  Datumsgrenze); Jahre mit < ⅓ Flächenabdeckung entfallen.
+* Zeitpunkt des Hervortretens: erstes Jahr, ab dem das 11-Jahres-Mittel dauerhaft > 2σ der
+  (trendbereinigten) Schwankung der Referenzperiode liegt (Hawkins & Sutton 2012).
+* Extreme: jede Zelle-Jahr standardisiert mit eigenem Mittel/σ der Referenzperiode;
+  flächengewichtete Histogramme je Zeitraum.
+
+Validierung: globaler Trend 1975–2025 = **+0,21 °C/Dekade** (Literatur ≈ 0,2), Arktis ≈ 3,2×
+global (arktische Verstärkung, Literatur 3–4× seit 1979), globale Jahresanomalie 2025 ≈ +1,2 °C
+ggü. 1951–1980 – konsistent mit den NASA-Veröffentlichungen.
+
+## 5. Dateien
+
+| Datei | Inhalt |
+|---|---|
+| `global_data.py` | Download/Laden von GISTEMP (netCDF3 über scipy, kein neues Paket) |
+| `global_analysis.py` | Regionen, Saisonmittel, Trends, Kartenebenen, Statistik, Ranking, Hovmöller, Extreme |
+| `global_api.py` | `GET /api/global/{meta,layer,frames,regions,cell,ranking,zonal,distribution}` |
+| `explorer/` | Oberfläche (MapLibre-Globus, Canvas-Overlay, SVG-Diagramme ohne weitere Bibliotheken) |
+| `static/vendor/` | MapLibre GL 6.18 (aus `map-widget/node_modules`), Natural-Earth-Küstenlinie |
+| `tests/test_global_analysis.py` | 22 Tests auf synthetischem Gitter mit bekannten Trends |
+
+`app.py` hat nur zwei Ergänzungen (Weiterleitung der `/api/global/`-Anfragen, Redirect
+`/explorer` → `/explorer/`).
+
+## 6. Grenzen & nächste Schritte
+
+* **Auflösung 2°** (~220 km): NRW besteht aus 6 Teilzellen. Für Städte/kleine Regionen ist die
+  Stationsanalyse besser – beides ergänzt sich (Idee: Klick im Explorer → „Stationen hier
+  auswerten“).
+* **Nur Temperatur.** Weitere globale Raster wären z. B. GPCP-Niederschlag, NSIDC-Meereis,
+  ERA5-Monatsmittel (Copernicus, braucht kostenlosen Schlüssel) oder Berkeley Earth (1°,
+  ~450 MB). `GriddedDataset` ist dafür vorbereitet; netCDF4/HDF5-Dateien bräuchten `h5py`.
+* **Frühe Jahre** haben in Polarregionen, Afrika und Südmeeren wenige Messungen – die
+  Flächenabdeckung wird angezeigt, die Statistik ignoriert Jahre mit zu geringer Abdeckung.
+* GISTEMP glättet über bis zu 1200 km → kleinere Schwankungen (σ) als an Einzelstationen;
+  relevant für die Extreme-Ansicht (Hinweis in der App).
+* Mögliche Erweiterungen: Land/Meer-Maske, Vergleich zweier Zeiträume als Differenzkarte,
+  Export der Karte als PNG, Kombination mit den Stationsdaten des bisherigen Tools.

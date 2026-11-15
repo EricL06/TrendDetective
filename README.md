@@ -19,6 +19,20 @@ a time frame with data. This comes from the station metadata of the NOAA Search 
 (`POST /api/coverage`, see [`station_coverage.py`](station_coverage.py)); no observations are
 downloaded for it.
 
+## Global Explorer (globale Trends vergleichen)
+
+Open http://127.0.0.1:8000/explorer/ for a globe-first view built on the NASA GISTEMP v4
+temperature grid (2°, monthly since 1880): maps of warming trend, anomaly, acceleration,
+signal-to-noise and spatial gradient, a year-by-year animation, and side-by-side comparison
+of any regions (presets such as Mediterranean, Antarctica, South Pacific, NRW; place search;
+drawn rectangles; single grid cells). The dataset (~26 MB) is downloaded on first use into
+`data/cache/gistemp/`. Concept, methods and an analysis of the station-based tool:
+[docs/global-explorer.md](docs/global-explorer.md).
+
+```bash
+python -m unittest tests.test_global_analysis
+```
+
 ## Map widget
 
 The world map is the widget in [`map-widget/`](map-widget/), built into [`static/map-widget/`](static/map-widget/).
