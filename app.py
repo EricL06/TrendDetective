@@ -5,7 +5,8 @@ from :func:`api_wrapper.get_all_topics_list` at ``GET /api/topics``, provides
 available analysis tools from :mod:`src.task` at ``GET /api/tools``, and routes
 button click events at ``POST /api/buttons/<button_id>`` to the single method
 bound to that button. ``GET /api/places?q=<name>`` looks up cities and regions;
-``POST /api/coverage`` tells when the stations of a selection have data.
+``POST /api/coverage`` tells when the stations of a selection have data;
+``GET /api/examples`` lists famous events to start from (:mod:`examples`).
 """
 
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import area_analysis
+import examples
 import station_coverage
 import interface
 import places
@@ -152,6 +154,10 @@ class WebAppHandler(SimpleHTTPRequestHandler):
             # ``?topics=a,b``: only regions where a selected topic can be evaluated.
             topics = [t for t in parse_qs(url.query).get("topics", [""])[0].split(",") if t]
             self._send_json(200, {"regions": area_analysis.list_regions(topics)})
+            return
+
+        if url.path == "/api/examples":
+            self._send_json(200, {"examples": examples.list_examples()})
             return
 
         if self.path == "/api/tools":

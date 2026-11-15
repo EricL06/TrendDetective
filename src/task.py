@@ -657,6 +657,14 @@ VARIABLE_NAMES: dict[str, str] = {
     "dew_pt_temp": "dew point",
     "wsfg": "peak gust",
     "viirs_ice_thickness": "ice thickness",
+    "dewp": "dew point",
+    "pmsl": "sea-level pressure",
+    "cldc": "cloud cover",
+    "tsun": "sunshine",
+    "srad": "solar radiation",
+    "et0": "evapotranspiration",
+    "soilm": "soil moisture",
+    "soilt": "soil temperature",
 }
 """Readable names of common NOAA codes, used in the per-variable result keys."""
 

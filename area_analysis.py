@@ -444,9 +444,17 @@ def _fetch_all_records(
         return clients[source].fetch(group, topic_key.lower(), start_date, end_date)
 
     records: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=max(1, len(by_source))) as pool:
-        for part in pool.map(fetch, list(by_source)):
-            records.extend(part)
+    sources = list(by_source)
+    with ThreadPoolExecutor(max_workers=max(1, len(sources))) as pool:
+        futures = [pool.submit(fetch, source) for source in sources]
+        failures: list[str] = []
+        for source, future in zip(sources, futures):
+            try:
+                records.extend(future.result())
+            except Exception as error:  # noqa: BLE001 - keep the other databases' stations
+                failures.append(f"{source}: {error}")
+    if not records and failures:
+        raise RuntimeError("; ".join(failures))
     return records
 
 

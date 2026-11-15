@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Iterator, Protocol, Sequence
 
@@ -207,7 +207,9 @@ def fetch_data_single_topic_nearest_station(
         for order, (key, future) in enumerate(futures.items()):
             try:
                 collections = future.result()
-            except (RuntimeError, ValueError, OSError) as error:  # NOAAError/SourceError are RuntimeErrors
+            except Exception as error:  # noqa: BLE001 - one broken source must not hide the others
+                # NOAAError/SourceError are RuntimeErrors, but a malformed answer
+                # can also raise e.g. XML ParseError (a SyntaxError) or KeyError.
                 errors.append(f"{PROVIDER_NAMES.get(key, key)}: {error}")
                 continue
             if any(isinstance(r.get("value"), (int, float)) for c in collections for r in c):
@@ -244,7 +246,7 @@ def _period(text: str) -> tuple[date, date] | None:
             return day, day
         if len(text) == 7:
             year, month = int(text[:4]), int(text[5:7])
-            return date(year, month, 1), date(year + month // 12, month % 12 + 1, 1)
+            return date(year, month, 1), date(year + month // 12, month % 12 + 1, 1) - timedelta(days=1)
         if len(text) == 4:
             return date(int(text), 1, 1), date(int(text), 12, 31)
     except ValueError:
