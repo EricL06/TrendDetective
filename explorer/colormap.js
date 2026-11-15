@@ -1,8 +1,11 @@
 // Colour scales and the grid → map overlay renderer.
 
-// Diverging blue–white–red (ColorBrewer RdBu, reversed: blue = colder, red = warmer).
-const RDBU = ["#053061", "#2166ac", "#4393c3", "#92c5de", "#d1e5f0", "#f2f2f2",
-  "#fddbc7", "#f4a582", "#d6604d", "#b2182b", "#67001f"];
+// Diverging temperature scale: navy → blue → pale → yellow → orange → red → plum.
+// The warm half walks through several hues (not just ever-darker red), so +0,5 °C
+// and +2 °C stay distinguishable when most of the planet is warmer than the baseline.
+// Lightness falls monotonically away from the neutral midpoint on both sides.
+const RDBU = ["#1b2b66", "#234f95", "#3577bb", "#62a6d6", "#9fcde8", "#d6ebf5", "#f4f2ea",
+  "#fde3a1", "#fdbe63", "#f78f3f", "#e04f2e", "#b31f2c", "#6d0f3a"];
 // Diverging brown–white–green (ColorBrewer BrBG): brown = drier, green = wetter.
 const BRBG = ["#543005", "#8c510a", "#bf812d", "#dfc27d", "#f6e8c3", "#f2f2f2",
   "#c7eae5", "#80cdc1", "#35978f", "#01665e", "#003c30"];
@@ -127,9 +130,9 @@ export function renderGrid(canvas, grid, geom, scale, { smooth = true, mask = nu
   ctx.putImageData(img, 0, 0);
 
   if (mask) {
-    // Stipple: a small dark dot in the centre of each cell without a significant trend.
-    ctx.fillStyle = "rgba(10,14,20,0.42)";
-    const rad = Math.max(0.8, W / nlon / 8);
+    // Stipple: a fine dark dot in the centre of each cell without a significant trend.
+    ctx.fillStyle = "rgba(10,14,20,0.32)";
+    const rad = Math.max(0.7, W / nlon / 11);
     for (let r = 0; r < nlat; r++) {
       const lat = lat0 + r * dlat;
       if (Math.abs(lat) > MERC_MAX_LAT) continue;

@@ -64,19 +64,45 @@ saubere Tests für Quellen und Region-Auswertung.
 
 ## 3. Funktionen
 
+### Bedienkonzept (seit der Überarbeitung)
+Die Karte steht im Mittelpunkt, alles andere schwebt klein darüber und lässt sich einklappen:
+
+* **Links – Ansicht:** zwei Hauptansichten, alles Weitere unter „Mehr“.
+  * **Zeitreise** (Start): Abweichung jedes Jahres – oder jedes **Monats** – vom gewählten
+    Vergleichszeitraum. „Vergleich mit“ (1951–1980, 1991–2020 = heutiges Klima, 1880–1900 …)
+    liegt direkt sichtbar daneben, weil er bestimmt, wie „rot“ die Welt aussieht.
+  * **Trend**: Erwärmungs- bzw. Niederschlagstrend im Zeitraum (Schnellwahl + Jahresfelder).
+  * **Mehr ▾**: Mittlere Abweichung, Beschleunigung, Signal/Rauschen, räumlicher Gradient,
+    beim Niederschlag zusätzlich der relative Trend.
+  * Jahreszeit und Darstellungsoptionen liegen unter „Einstellungen“.
+* **Oben Mitte – Zeitanzeige:** groß das gezeigte Jahr („2024“) bzw. der Monat („Juli 2023“)
+  oder der Zeitraum, darunter das globale Mittel.
+* **Unten – Zeitleiste:** Die Spur zeigt die Geschichte des **gerade sichtbaren
+  Kartenausschnitts** als Klimastreifen mit Kurve. In der Zeitreise zieht man den Griff durch
+  die Jahre/Monate, ▶ spielt den Zeitraffer (Tempo 0,5–4×, Leertaste, ← →). In den Trend-Ansichten
+  hat die Leiste zwei Griffe für den Zeitraum und zeigt die Trendgerade des Ausschnitts.
+  Rechts steht der Wert des Ausschnitts; ⊕ übernimmt den Ausschnitt als Region.
+  Zoomen und Abspielen ergibt so „dieses Gebiet im Zeitraffer“.
+* **Rechts – Regionen:** Suche, ▭ Zeichnen, Liste der Auswahl; vordefinierte Regionen sind
+  unter „Vorschläge“ eingeklappt. Es ist **nichts vorausgewählt**; mit der ersten Region
+  öffnet sich der Analysebereich unten.
+* **Farbskala Temperatur:** Navy → Blau → hell → Gelb → Orange → Rot → Pflaume. Die warme Hälfte
+  wechselt den Farbton statt nur dunkler zu werden, damit +0,5 °C und +2,5 °C unterscheidbar
+  bleiben. In der Zeitreise ist die Skala über alle Jahre fest (sonst wäre der Zeitraffer
+  irreführend).
+
 ### Kartenebenen
 | Ebene | Bedeutung |
 |---|---|
+| Zeitreise | Abweichung jedes Jahres oder Monats vom Vergleichszeitraum, als Zeitraffer 1880 → heute |
 | Trend | OLS-Trend je Zelle in °C/Dekade; Punkte = nicht signifikant (p ≥ 0,05, AR(1)-korrigiert) |
-| Anomalie | Mittlere Abweichung im Zeitraum ggü. Referenzperiode |
-| Einzeljahr ▶ | Anomalie jedes Jahres, als Animation 1880 → heute |
+| Mittlere Abweichung | Mittlere Abweichung im Zeitraum ggü. Referenzperiode |
 | Beschleunigung | Trend 2. Hälfte − Trend 1. Hälfte („zweite Ableitung“) |
 | Signal/Rauschen | Änderung im Zeitraum / Jahr-zu-Jahr-Schwankung |
 | Räuml. Gradient | Betrag des räumlichen Gradienten des Trendfelds (°C/Dekade pro 1000 km) |
 
-Einstellungen: Zeitraum (mit Schnellwahl), Jahr/Jahreszeit/Einzelmonat, Referenzperiode
-(1951–1980, 1961–1990, 1991–2020, 1880–1900 ≈ vorindustriell), Interpolation an/aus,
-Deckkraft, feste Farbskala, Globus/Karte. Hover zeigt den Wert jeder Zelle, Klick öffnet ein
+Monatskarten werden in Zehnjahresstücken nachgeladen (`frames?res=monthly`, gzip, ≈ 2 MB je
+Jahrzehnt) und beim Abspielen vorab geholt. Hover zeigt den Wert jeder Zelle, Klick öffnet ein
 Popup mit Mini-Zeitreihe und Kennzahlen.
 
 **Interpolation ohne erfundene Daten:** Werte gehören zu Zellmittelpunkten; die Darstellung
@@ -101,8 +127,8 @@ Region. Die Karten weichen einander und den Bedienfeldern aus und verschwinden h
 Horizont des Globus. Klick → Statistik.
 
 Weitere: CSV-Export der Regionszeitreihen, „Link teilen“ (kompletter Zustand in der URL),
-verstellbare Höhe des Analysebereichs, Handy-Layout, Tastatur im Einzeljahr-Modus
-(← → Jahr, Leertaste = Abspielen).
+verstellbare Höhe des Analysebereichs, Handy-Layout, Tastatur in der Zeitreise
+(← → Jahr/Monat, Leertaste = Abspielen).
 
 ## 4. Demo-Pfad (für den Pitch, ca. 3 Minuten)
 
@@ -110,8 +136,10 @@ Alle Links setzen den kompletten Zustand (Server lokal auf Port 8000):
 
 1. **Die Welt erwärmt sich ungleich** – Trendkarte 1979–2025, Punkte = nicht signifikant:
    <http://127.0.0.1:8000/explorer/#k=trend&p=1979-2025&s=annual&b=1951-1980>
-2. **146 Jahre im Zeitraffer** – Einzeljahr-Modus, ▶ drücken:
+2. **146 Jahre im Zeitraffer** – Zeitreise, ▶ drücken (dann auf Europa zoomen und erneut
+   abspielen – die Zeitleiste zeigt nun Europas Klimastreifen):
    <http://127.0.0.1:8000/explorer/#k=year&y=1880&s=annual&b=1951-1980>
+   Monatsweise, z. B. der Hitzesommer 2003: <http://127.0.0.1:8000/explorer/#k=year&m=1&y=2003-08&b=1991-2020>
 3. **Mittelmeer vs. Antarktis vs. Südpazifik vs. NRW** – Zeitreihe, dann „Statistik“
    (Kurzfazit + Faktor ggü. global):
    <http://127.0.0.1:8000/explorer/#k=trend&p=1979-2025&s=annual&b=1951-1980&r=mediterranean|antarctica|south_pacific|nrw&t=stats>
@@ -154,10 +182,10 @@ Trend ≈ 0, Arktis signifikant feuchter (+4 %/Dekade).
 |---|---|
 | `global_data.py` | Download/Laden von GISTEMP (netCDF3) und GPCP (netCDF3 über den THREDDS-Subset-Dienst, in Zehnjahresstücken) – nur scipy, kein neues Paket |
 | `global_analysis.py` | Regionen, Saisonmittel, Trends, Kartenebenen, Statistik, Ranking, Hovmöller, Extreme |
-| `global_api.py` | `GET /api/global/{meta,layer,frames,regions,cell,ranking,zonal,distribution}`, Datensatz über `?ds=gistemp|gpcp` |
-| `explorer/` | Oberfläche (MapLibre-Globus, Canvas-Overlay, SVG-Diagramme ohne weitere Bibliotheken) |
+| `global_api.py` | `GET /api/global/{meta,layer,frames,regions,cell,ranking,zonal,distribution}`, Datensatz über `?ds=gistemp|gpcp`; `frames?res=monthly&from&to` liefert Monatskarten (≤ 20 Jahre, gzip) |
+| `explorer/` | Oberfläche (MapLibre-Globus, Canvas-Overlay, Zeitleiste `timebar.js`, SVG-Diagramme ohne weitere Bibliotheken) |
 | `static/vendor/` | MapLibre GL 6.18 (aus `map-widget/node_modules`), Natural-Earth-Küstenlinie |
-| `tests/test_global_analysis.py` | 25 Tests auf synthetischen Gittern mit bekannten Trends (Temperatur & Niederschlag) |
+| `tests/test_global_analysis.py` | 27 Tests auf synthetischen Gittern mit bekannten Trends (Temperatur & Niederschlag) |
 
 `app.py` hat nur zwei Ergänzungen (Weiterleitung der `/api/global/`-Anfragen, Redirect
 `/explorer` → `/explorer/`).

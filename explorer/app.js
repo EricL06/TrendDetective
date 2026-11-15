@@ -2,6 +2,7 @@
 import * as maplibregl from "/static/vendor/maplibre/maplibre-gl.mjs";
 import { renderGrid, drawColorbar, niceCeil, MERC_MAX_LAT, cssColor } from "./colormap.js";
 import * as charts from "./charts.js";
+import { TimeBar } from "./timebar.js";
 
 maplibregl.setWorkerUrl("/static/vendor/maplibre/maplibre-gl-worker.mjs");
 
@@ -15,31 +16,33 @@ const FALLBACK_STYLE = {
   layers: [{ id: "background", type: "background", paint: { "background-color": "#0b1420" } }],
 };
 
+// "year" and "trend" are the two main views; the others sit in the "Mehr" menu.
 const LAYER_UI = [
-  { id: "trend", short: "Trend", hint: (w) => `Lineare ${w ? "Erwärmungsrate" : "Änderung des Niederschlags"} je Gitterzelle (${trendUnit()}). Punkte = Trend nicht signifikant (p ≥ 0,05, autokorrelationskorrigiert).` },
-  { id: "trend_rel", short: "Rel. Trend", hint: () => "Niederschlagstrend relativ zum Klimamittel 1991–2020 (% pro Dekade) – vergleicht trockene und feuchte Gebiete fair. Zellen mit < 0,1 mm/Tag bleiben leer." },
-  { id: "anomaly", short: "Anomalie", hint: () => "Mittlere Abweichung im gewählten Zeitraum gegenüber der Referenzperiode." },
-  { id: "year", short: "Einzeljahr ▶", hint: () => "Anomalie jedes einzelnen Jahres – mit ▶ als Animation über alle Jahre." },
-  { id: "acceleration", short: "Beschleunigung", hint: (w) => `Trend der zweiten minus Trend der ersten Hälfte des Zeitraums. ${w ? "Rot = Erwärmung wird schneller." : "Grün = wird schneller feuchter, braun = schneller trockener."} Punkte = Unterschied nicht signifikant.` },
-  { id: "snr", short: "Signal/Rauschen", hint: () => "Lineare Änderung im Zeitraum geteilt durch die natürliche Jahr-zu-Jahr-Schwankung. Ab ≈ 2 hebt sich der Trend deutlich vom Rauschen ab." },
-  { id: "gradient", short: "Räuml. Gradient", hint: () => `Wie stark sich der Trend zwischen Nachbarregionen ändert (${trendUnit()} pro 1000 km) – zeigt Grenzen wie Meereis- oder Küstenkanten.` },
+  { id: "year", short: "Zeitreise", hint: (w) => `${w ? "Wie viel wärmer oder kälter" : "Wie viel nasser oder trockener"} als im Mittel ${baselineLabel()} – Jahr für Jahr. ▶ spielt den Zeitraffer ab.` },
+  { id: "trend", short: "Trend", hint: (w) => `Wie schnell ${w ? "es sich erwärmt" : "sich der Niederschlag ändert"} (${trendUnit()}). Zeitraum unten in der Zeitleiste ziehen. Punkte = nicht signifikant.` },
+  { id: "trend_rel", short: "Relativer Trend", more: true, hint: () => "Niederschlagstrend relativ zum Klimamittel 1991–2020 (% pro Dekade) – vergleicht trockene und feuchte Gebiete fair." },
+  { id: "anomaly", short: "Mittlere Abweichung", more: true, hint: () => "Mittlere Abweichung im gewählten Zeitraum gegenüber der Referenzperiode." },
+  { id: "acceleration", short: "Beschleunigung", more: true, hint: (w) => `Trend der zweiten minus Trend der ersten Hälfte des Zeitraums. ${w ? "Rot = Erwärmung wird schneller." : "Grün = wird schneller feuchter."} Punkte = nicht signifikant.` },
+  { id: "snr", short: "Signal / Rauschen", more: true, hint: () => "Änderung im Zeitraum geteilt durch die natürliche Jahr-zu-Jahr-Schwankung. Ab ≈ 2 hebt sich der Trend klar vom Rauschen ab." },
+  { id: "gradient", short: "Räumlicher Gradient", more: true, hint: () => `Wie stark sich der Trend zwischen Nachbarregionen ändert (${trendUnit()} pro 1000 km) – zeigt Kanten wie Meereisgrenzen.` },
 ];
+const MONTHS = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+const SPEEDS = [0.5, 1, 2, 4];
 
 const PERIOD_PRESETS = [
-  { label: "1880–heute", start: 1880 },
-  { label: "1951–heute", start: 1951 },
-  { label: "1979–heute", start: 1979, title: "Satellitenära – Standardzeitraum vieler Studien" },
-  { label: "Letzte 30 J.", recent: 30 },
+  { label: "seit 1880", start: 1880 },
+  { label: "seit 1951", start: 1951 },
+  { label: "seit 1979", start: 1979, title: "Satellitenära – Standardzeitraum vieler Studien" },
+  { label: "letzte 30 J.", recent: 30 },
 ];
-
-const DEFAULT_REGIONS = [{ preset: "mediterranean" }, { preset: "antarctica" }, { preset: "south_pacific" }, { preset: "nrw" }];
 
 // ---------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 const state = {
   meta: null,
   ds: "gistemp",
-  kind: "trend",
+  kind: "year",
+  res: "annual", // time step of the Zeitreise: annual | monthly
   start: 1979,
   end: null,
   season: "annual",
@@ -48,20 +51,26 @@ const state = {
   mapCharts: true,
   smooth: true,
   globe: true,
-  opacity: 0.82,
+  opacity: 0.85,
   scaleMax: null,
   year: null,
+  month: 1, // 1–12, only for res = monthly
+  speed: 1,
   regions: [], // {uid, spec, name, color}
   tab: "series",
   layer: null, // last layer response
   grid: null, // Float32Array of the displayed grid
   sigMask: null,
   regionData: null,
-  frames: null, // {key, years, data: Int16Array}
+  frames: null, // yearly maps {key, years, data: Int16Array, vmax}
+  monthly: new Map(), // decade → {key, y0, count, data}
+  view: null, // Float32Array weights of the visible cells
+  viewSeries: null, // yearly area mean of the visible cells
   playing: false,
 };
 let map;
 let overlayCanvas;
+let timebar;
 let uidCounter = 0;
 const presetById = {};
 
@@ -126,8 +135,7 @@ function configureCharts() {
   const tabs = { tempo: isTemp() ? "Erwärmungstempo" : "Trendtempo", stripes: isTemp() ? "Wärmestreifen" : "Niederschlagsstreifen" };
   for (const [tab, label] of Object.entries(tabs)) document.querySelector(`#tabs [data-tab=${tab}]`).textContent = label;
   for (const b of $("ds-seg").querySelectorAll("button")) b.setAttribute("aria-checked", String(b.dataset.ds === state.ds));
-  const ds = state.meta.dataset;
-  $("dataset-line").textContent = `${ds.name} · ${ds.resolution}-Gitter · ${ds.first[0]}–${String(ds.last[1]).padStart(2, "0")}/${ds.last[0]} · monatlich`;
+  document.body.dataset.ds = state.ds;
 }
 
 function periodParams() {
@@ -153,8 +161,9 @@ function writeHash() {
   p.set("p", `${state.start}-${state.end}`);
   p.set("s", state.season);
   p.set("b", state.baseline);
-  if (state.kind === "year" && state.year) p.set("y", state.year);
-  p.set("r", state.regions.map((r) => (r.spec.preset ? r.spec.preset : JSON.stringify(r.spec))).join("|"));
+  if (state.kind === "year" && state.year) p.set("y", state.res === "monthly" ? `${state.year}-${String(state.month).padStart(2, "0")}` : state.year);
+  if (state.kind === "year" && state.res === "monthly") p.set("m", "1");
+  if (state.regions.length) p.set("r", state.regions.map((r) => (r.spec.preset ? r.spec.preset : JSON.stringify(r.spec))).join("|"));
   if (state.tab !== "series") p.set("t", state.tab);
   history.replaceState(null, "", "#" + p.toString());
 }
@@ -168,19 +177,17 @@ function readHash() {
   // Only accept values the dataset offers, so a broken link falls back to defaults.
   if (state.meta.seasons.some((x) => x.id === p.get("s"))) state.season = p.get("s");
   if (state.meta.baselines.some((x) => x.id === p.get("b"))) state.baseline = p.get("b");
-  if (Number.isFinite(Number(p.get("y"))) && p.get("y")) state.year = Number(p.get("y"));
+  const [yy, mm] = String(p.get("y") || "").split("-").map(Number);
+  if (Number.isFinite(yy) && yy > 0) state.year = yy;
+  if (Number.isFinite(mm) && mm >= 1 && mm <= 12) state.month = mm;
+  if (p.get("m") === "1") state.res = "monthly";
   if ([...document.querySelectorAll("#tabs [data-tab]")].some((b) => b.dataset.tab === p.get("t"))) state.tab = p.get("t");
-  const r = p.get("r");
-  if (r == null) {
-    for (const spec of DEFAULT_REGIONS) addRegion(spec, { silent: true });
-  } else {
-    state.regions = [];
-    for (const part of r.split("|").filter(Boolean)) {
-      try {
-        const spec = part.startsWith("{") ? JSON.parse(part) : { preset: part };
-        addRegion(spec, { silent: true });
-      } catch { /* ignore broken entries */ }
-    }
+  state.regions = [];
+  for (const part of (p.get("r") || "").split("|").filter(Boolean)) {
+    try {
+      const spec = part.startsWith("{") ? JSON.parse(part) : { preset: part };
+      addRegion(spec, { silent: true });
+    } catch { /* ignore broken entries */ }
   }
   return true;
 }
@@ -194,17 +201,17 @@ function buildControls() {
 }
 
 function populateControls() {
-  const seg = $("layer-seg");
-  seg.innerHTML = "";
   const available = new Set(state.meta.layers.map((l) => l.id).concat(["year"]));
-  for (const l of LAYER_UI.filter((x) => available.has(x.id))) {
+  const menu = $("more-menu");
+  menu.innerHTML = "";
+  for (const l of LAYER_UI.filter((x) => x.more && available.has(x.id))) {
     const b = document.createElement("button");
     b.type = "button";
-    b.role = "radio";
+    b.role = "menuitemradio";
     b.dataset.kind = l.id;
-    b.textContent = l.short;
-    b.addEventListener("click", () => setKind(l.id));
-    seg.appendChild(b);
+    b.innerHTML = `<b>${l.short}</b><span>${charts.escapeHtml(l.hint(isTemp()).split(/[.–]/)[0])}</span>`;
+    b.addEventListener("click", () => { closeMoreMenu(); setKind(l.id); });
+    menu.appendChild(b);
   }
   const season = $("season");
   season.innerHTML = "";
@@ -220,7 +227,7 @@ function populateControls() {
   const baseline = $("baseline");
   baseline.innerHTML = "";
   for (const b of state.meta.baselines) {
-    const label = b.id === "1880-1900" ? `${b.label} (≈ vorindustriell)` : b.id === "1951-1980" ? `${b.label} (NASA-Standard)` : b.id === "1991-2020" ? `${b.label} (WMO-Normal)` : b.label;
+    const label = b.id === "1880-1900" ? `${b.label} (vorindustriell)` : b.id === "1951-1980" ? `${b.label} (NASA)` : b.id === "1991-2020" ? `${b.label} (heutiges Klima)` : b.label;
     baseline.appendChild(new Option(label, b.id));
   }
   const pp = $("period-presets");
@@ -246,18 +253,32 @@ function populateControls() {
   }
 }
 
+function closeMoreMenu() {
+  $("more-menu").hidden = true;
+  $("btn-more").setAttribute("aria-expanded", "false");
+}
+
 function buildListeners() {
   for (const b of $("ds-seg").querySelectorAll("button")) b.addEventListener("click", () => switchDataset(b.dataset.ds));
+  for (const b of $("mode-seg").querySelectorAll("[data-mode=year],[data-mode=trend]")) b.addEventListener("click", () => setKind(b.dataset.mode));
+  $("btn-more").addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = $("more-menu").hidden;
+    $("more-menu").hidden = !open;
+    $("btn-more").setAttribute("aria-expanded", String(open));
+  });
+  document.addEventListener("click", (e) => { if (!e.target.closest?.(".more")) closeMoreMenu(); });
+  for (const b of $("res-seg").querySelectorAll("button")) b.addEventListener("click", () => setRes(b.dataset.res));
   $("start-year").addEventListener("change", (e) => setPeriod(Number(e.target.value), state.end));
   $("end-year").addEventListener("change", (e) => setPeriod(state.start, Number(e.target.value)));
-  season.addEventListener("change", (e) => {
+  $("season").addEventListener("change", (e) => {
     state.season = e.target.value;
     state.frames = null;
     state.end = Math.min(state.end, lastFullYear());
     syncControls();
     refreshAll();
   });
-  baseline.addEventListener("change", (e) => { state.baseline = e.target.value; state.frames = null; refreshAll(); });
+  $("baseline").addEventListener("change", (e) => { state.baseline = e.target.value; state.frames = null; state.monthly.clear(); refreshAll(); });
   $("opt-sig").addEventListener("change", (e) => { state.sig = e.target.checked; redrawOverlay(); });
   $("opt-smooth").addEventListener("change", (e) => { state.smooth = e.target.checked; redrawOverlay(); });
   $("opt-globe").addEventListener("change", (e) => { state.globe = e.target.checked; applyProjection(); });
@@ -271,23 +292,36 @@ function buildListeners() {
     const v = Number(e.target.value);
     state.scaleMax = v > 0 ? v : null;
     redrawOverlay();
+    updateTimebar();
   });
   $("btn-collapse-controls").addEventListener("click", () => {
     const c = $("controls");
     c.classList.toggle("collapsed");
-    $("btn-collapse-controls").textContent = c.classList.contains("collapsed") ? "+" : "–";
+    $("btn-collapse-controls").textContent = c.classList.contains("collapsed") ? "›" : "‹";
+    $("btn-collapse-controls").title = c.classList.contains("collapsed") ? "Ausklappen" : "Einklappen";
+    scheduleChipLayout();
   });
-  $("btn-toggle-analysis").addEventListener("click", () => {
-    const l = document.querySelector(".layout");
-    l.classList.toggle("analysis-collapsed");
-    $("btn-toggle-analysis").textContent = l.classList.contains("analysis-collapsed") ? "▴" : "▾";
-    setTimeout(() => { map?.resize(); renderAnalysis(); }, 60);
+  $("btn-collapse-regions").addEventListener("click", () => {
+    const c = $("regions-panel");
+    c.classList.toggle("collapsed");
+    $("btn-collapse-regions").textContent = c.classList.contains("collapsed") ? "+" : "–";
+    scheduleChipLayout();
   });
+  $("btn-toggle-analysis").addEventListener("click", () => setAnalysisOpen(isAnalysisCollapsed()));
   for (const b of $("tabs").querySelectorAll("button")) {
-    b.addEventListener("click", () => { state.tab = b.dataset.tab; syncControls(); renderAnalysis(); writeHash(); });
+    b.addEventListener("click", () => {
+      state.tab = b.dataset.tab;
+      syncControls();
+      if (isAnalysisCollapsed()) setAnalysisOpen(true); else renderAnalysis();
+      writeHash();
+    });
   }
   $("btn-play").addEventListener("click", togglePlay);
-  $("year-slider").addEventListener("input", (e) => { state.year = Number(e.target.value); showYear(); });
+  $("btn-speed").addEventListener("click", () => {
+    state.speed = SPEEDS[(SPEEDS.indexOf(state.speed) + 1) % SPEEDS.length];
+    $("btn-speed").textContent = `${String(state.speed).replace(".", ",")}×`;
+  });
+  $("btn-view-region").addEventListener("click", addViewAsRegion);
   $("btn-about").addEventListener("click", () => $("about").showModal());
   $("btn-draw").addEventListener("click", () => setDrawMode(!drawMode));
   $("btn-csv").addEventListener("click", downloadCsv);
@@ -296,34 +330,68 @@ function buildListeners() {
     try { await navigator.clipboard.writeText(location.href); toast("Link mit allen Einstellungen kopiert.", "info"); }
     catch { toast("Kopieren nicht möglich – bitte die Adresszeile kopieren.", "info"); }
   });
+  timebar = new TimeBar($("tb-track"), {
+    onValue: (t) => {
+      if (state.kind !== "year") return;
+      if (state.playing) togglePlay();
+      setTime(t);
+    },
+    onRange: (a, b) => setPeriod(a, b),
+  });
   setupResize();
   if (window.matchMedia("(max-width: 760px)").matches) {
     state.mapCharts = false; // too little room for chips on a phone
     $("opt-mapcharts").checked = false;
     $("controls").classList.add("collapsed");
-    $("btn-collapse-controls").textContent = "+";
+    $("btn-collapse-controls").textContent = "›";
+    $("regions-panel").classList.add("collapsed");
+    $("btn-collapse-regions").textContent = "+";
   }
   buildPresets();
   buildSearch();
   buildAbout();
 }
 
+const isAnalysisCollapsed = () => document.querySelector(".layout").classList.contains("analysis-collapsed");
+
+function setAnalysisOpen(open) {
+  const l = document.querySelector(".layout");
+  if (open === !l.classList.contains("analysis-collapsed")) return;
+  l.classList.toggle("analysis-collapsed", !open);
+  $("btn-toggle-analysis").textContent = open ? "▾" : "▴";
+  setTimeout(() => { map?.resize(); renderAnalysis(); scheduleChipLayout(); }, 60);
+}
+
 function syncControls() {
-  for (const b of $("layer-seg").querySelectorAll("button")) b.setAttribute("aria-checked", String(b.dataset.kind === state.kind));
+  const more = LAYER_UI.find((l) => l.id === state.kind && l.more);
+  for (const b of $("mode-seg").querySelectorAll("[data-mode]")) {
+    const on = b.dataset.mode === state.kind || (b.dataset.mode === "more" && !!more);
+    b.setAttribute("aria-checked", String(on));
+  }
+  $("btn-more").innerHTML = `${more ? more.short : "Mehr"} <span aria-hidden="true">▾</span>`;
+  for (const b of $("more-menu").querySelectorAll("button")) b.setAttribute("aria-checked", String(b.dataset.kind === state.kind));
+  for (const b of $("res-seg").querySelectorAll("button")) b.setAttribute("aria-checked", String(b.dataset.res === state.res));
   $("layer-hint").textContent = LAYER_UI.find((l) => l.id === state.kind)?.hint(isTemp()) || "";
+  const isYear = state.kind === "year";
+  $("ctx-year").hidden = !isYear;
+  $("ctx-period").hidden = isYear;
+  $("baseline-field").hidden = !(isYear || state.kind === "anomaly");
+  $("season-field").hidden = isYear && state.res === "monthly";
+  $("res-seg").querySelector("[data-res=monthly]").disabled = false;
   $("start-year").value = state.start;
   $("end-year").value = state.end;
   $("season").value = state.season;
   $("baseline").value = state.baseline;
-  $("timeline").hidden = state.kind !== "year";
   const end = lastFullYear();
   for (const b of $("period-presets").children) {
     const start = b.dataset.recent ? end - Number(b.dataset.recent) + 1 : Number(b.dataset.start);
     b.classList.toggle("active", state.start === start && state.end === end);
   }
   for (const b of $("tabs").querySelectorAll("button")) b.setAttribute("aria-selected", String(b.dataset.tab === state.tab));
-  // the period inputs are irrelevant for the single-year view
-  document.querySelectorAll("#start-year,#end-year").forEach((e) => (e.disabled = false));
+  $("btn-play").title = isYear ? "Zeitraffer abspielen (Leertaste)" : "Zur Zeitreise wechseln und abspielen";
+  $("btn-speed").hidden = !isYear;
+  document.body.dataset.kind = state.kind;
+  updateTimebar();
 }
 
 async function switchDataset(key) {
@@ -344,12 +412,16 @@ async function switchDataset(key) {
   state.baseline = `${meta.dataset.baseline[0]}-${meta.dataset.baseline[1]}`;
   if (!meta.layers.some((l) => l.id === state.kind) && state.kind !== "year") state.kind = "trend";
   state.frames = null;
+  state.monthly.clear();
+  state.viewSeries = null;
+  state.view = null;
   state.scaleMax = null;
   $("scale-max").value = "";
   const first = meta.dataset.first[0];
   state.end = Math.min(state.end, lastFullYear());
   state.start = Math.max(state.start, first);
   if (state.end - state.start < 9) state.start = Math.max(first, state.end - 29);
+  state.year = Math.max(first, Math.min(state.year ?? state.end, meta.dataset.last[0]));
   populateControls();
   configureCharts();
   buildAbout();
@@ -365,13 +437,23 @@ function setKind(kind) {
   writeHash();
 }
 
+function setRes(res) {
+  if (res === state.res) return;
+  if (state.playing) togglePlay();
+  state.res = res;
+  if (res === "monthly") state.month = state.year >= state.meta.dataset.last[0] ? state.meta.dataset.last[1] : 12;
+  syncControls();
+  refreshLayer();
+  writeHash();
+}
+
 function setPeriod(start, end) {
   const first = state.meta.dataset.first[0];
   const last = lastFullYear();
   start = Math.max(first, Math.min(last, Math.round(start || first)));
   end = Math.max(first, Math.min(last, Math.round(end || last)));
   if (end - start < 9) {
-    toast("Der Zeitraum braucht mindestens 10 Jahre – ich habe ihn erweitert.");
+    toast("Der Zeitraum braucht mindestens 10 Jahre – ich habe ihn erweitert.", "info");
     if (start + 9 <= last) end = start + 9; else start = end - 9;
   }
   state.start = start;
@@ -395,7 +477,6 @@ function initMap() {
     renderWorldCopies: true,
     boxZoom: false,
   });
-  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
   let fellBack = false;
   map.on("error", (e) => {
     console.warn("map error:", e?.error?.message || e);
@@ -421,13 +502,19 @@ function initMap() {
   map.on("click", onMapClick);
   map.on("move", scheduleChipLayout);
   map.on("resize", scheduleChipLayout);
+  map.on("moveend", updateView);
+  map.on("load", () => {
+    updateView();
+    // keep the attribution folded to its (i) button; it would cover the legend
+    document.querySelector(".maplibregl-ctrl-attrib")?.classList.remove("maplibregl-compact-show");
+  });
   setupDrawing();
 }
 
 function initialZoom() {
   // Fit the globe into the map area (globe diameter ≈ 512·2^z / π px).
   const el = $("map");
-  const size = Math.min(el.clientWidth - 40, el.clientHeight * 0.94);
+  const size = Math.max(180, Math.min(el.clientWidth > 900 ? el.clientWidth - 600 : el.clientWidth - 24, el.clientHeight - 170));
   return Math.max(0.2, Math.log2((size * Math.PI) / 512));
 }
 
@@ -545,7 +632,7 @@ function updateCaps(scale) {
 function currentScale() {
   const L = state.layer;
   if (state.kind === "year") {
-    const m = state.scaleMax || state.frames?.vmax || 4;
+    const m = state.scaleMax || (state.res === "monthly" ? state.monthlyVmax : state.frames?.vmax) || 4;
     return { kind: scaleKind(), min: -m, max: m };
   }
   if (!L) return { kind: scaleKind(), min: -1, max: 1 };
@@ -595,10 +682,9 @@ function redrawOverlay() {
 
 function updateLegend(scale) {
   const L = state.layer;
-  const unit = state.kind === "year" ? unitOf() : L?.unit || "";
-  let title;
-  if (state.kind === "year") title = `Anomalie ${state.year} (${seasonLabel()}) ggü. ${baselineLabel()}`;
-  else title = `${L?.label || ""} · ${seasonLabel()} · ${L?.period?.[0]}–${L?.period?.[1]}`;
+  const year = state.kind === "year";
+  const unit = year ? unitOf() : L?.unit || "";
+  const title = year ? `Abweichung vom Mittel ${baselineLabel()}` : L?.label || "";
   $("legend-title").innerHTML = `${charts.escapeHtml(title)} <span class="unit">${charts.escapeHtml(unit)}</span>`;
   drawColorbar($("legend-bar"), scale);
   const ticks = $("legend-ticks");
@@ -611,20 +697,43 @@ function updateLegend(scale) {
     const digits = Math.abs(scale.max) < 0.1 ? 3 : Math.abs(scale.max) < 1 ? 2 : 1;
     s.textContent = charts.fmt(v, digits, scale.kind !== "sequential");
     if (i === 0) s.style.transform = "none";
-    if (i === n - 1) { s.style.transform = "translateX(-100%)"; }
+    if (i === n - 1) s.style.transform = "translateX(-100%)";
     ticks.appendChild(s);
   }
-  const st = $("legend-stats");
+  let ends = ["", ""];
+  if (scale.kind === "sequential") ends = ["gering", "stark"];
+  else if (!year && L?.kind === "snr") ends = ["Abnahme", "Zunahme"];
+  else if (!year && L?.kind === "acceleration") ends = isTemp() ? ["bremst", "beschleunigt"] : ["trockener werdend", "feuchter werdend"];
+  else ends = isTemp() ? ["kälter", "wärmer"] : ["trockener", "nasser"];
+  $("legend-ends").innerHTML = `<span>← ${ends[0]}</span><span>${ends[1]} →</span>`;
+  updateHeadline();
+}
+
+/** Big label on the map: which time the map shows and the global mean. */
+function updateHeadline() {
+  const L = state.layer;
+  let time, sub;
   if (state.kind === "year") {
-    const gm = globalMean(state.grid);
-    st.innerHTML = `<span>Globales Mittel</span><b>${charts.fmt(gm, 2)} ${unitOf()}</b>`;
+    if (state.res === "monthly") {
+      time = `${MONTHS[state.month - 1]} ${state.year}`;
+      sub = "Monatswert";
+    } else {
+      time = String(state.year ?? "");
+      sub = state.season === "annual" ? "Jahresmittel" : seasonLabel();
+    }
+    const gm = state.grid ? globalMean(state.grid) : null;
+    if (gm != null) sub += ` · Welt <b>${charts.fmt(gm, isTemp() ? 2 : 2)} ${unitOf()}</b>`;
   } else if (L) {
-    const s = L.summary;
-    const rows = [[`Flächenmittel`, `${charts.fmt(s.area_mean, isTemp() || L.unit === "σ" || L.unit.startsWith("%") ? 2 : 3, L.kind !== "gradient")} ${L.unit}`]];
-    if (s.significant_area != null) rows.push(["Signifikante Fläche", `${Math.round(s.significant_area * 100)} %`]);
-    rows.push(["Datenabdeckung", `${Math.round((s.coverage || 0) * 100)} %`]);
-    st.innerHTML = rows.map(([a, b]) => `<span>${a}</span><b>${b}</b>`).join("");
+    time = `${L.period[0]} – ${L.period[1]}`;
+    const s = L.summary || {};
+    sub = `${L.label}${state.season !== "annual" ? ` · ${seasonLabel()}` : ""}`;
+    if (s.area_mean != null && L.kind !== "gradient") {
+      sub += ` · Welt <b>${charts.fmt(s.area_mean, isTemp() || L.unit === "σ" || L.unit.startsWith("%") ? 2 : 3)} ${L.unit}</b>`;
+    }
+    if (s.significant_area != null) sub += ` · ${Math.round(s.significant_area * 100)} % der Fläche signifikant`;
   }
+  $("hl-time").textContent = time || "";
+  $("hl-sub").innerHTML = sub || "";
 }
 
 function globalMean(grid) {
@@ -755,17 +864,18 @@ function setupDrawing() {
   });
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && drawMode) { drawStart = null; setDrawMode(false); }
-    // ← / → step through the years, space plays/pauses (not while typing in a field).
-    if (state.kind !== "year" || !state.frames || /^(INPUT|SELECT|TEXTAREA|BUTTON|A)$/.test(document.activeElement?.tagName || "")) return;
-    const [y0, y1] = [state.frames.years[0], state.frames.years[state.frames.years.length - 1]];
-    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-      state.year = Math.max(y0, Math.min(y1, state.year + (e.key === "ArrowRight" ? 1 : -1)));
-      showYear();
-      e.preventDefault();
-    } else if (e.key === " ") {
-      togglePlay();
-      e.preventDefault();
-    }
+    // Space plays/pauses, ← / → step through time (not while typing in a field).
+    if (/^(INPUT|SELECT|TEXTAREA|BUTTON|A)$/.test(document.activeElement?.tagName || "") || document.querySelector("dialog[open]")) return;
+    if (e.key === " ") { togglePlay(); e.preventDefault(); return; }
+    if (state.kind !== "year" || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+    if (document.activeElement === $("tb-track")) return; // the time bar handles its own keys
+    if (state.playing) togglePlay();
+    const step = state.res === "monthly" ? 1 / 12 : 1;
+    const t = (state.res === "monthly" ? state.year + (state.month - 1) / 12 : state.year) + (e.key === "ArrowRight" ? step : -step);
+    const ds = state.meta.dataset;
+    const max = state.res === "monthly" ? ds.last[0] + (ds.last[1] - 1) / 12 : state.frames?.years.at(-1) ?? ds.last[0];
+    if (t >= ds.first[0] - 1e-6 && t <= max + 1e-6) setTime(t);
+    e.preventDefault();
   });
 }
 
@@ -775,6 +885,8 @@ function setupDrawing() {
 let layerReq = 0;
 async function refreshLayer() {
   const req = ++layerReq;
+  // The yearly maps feed the time bar (history of the visible area) in every view.
+  loadFrames().then(() => { computeViewSeries(); updateTimebar(); }).catch(() => {});
   if (state.kind === "year") return showYearMode(req);
   loading(true, "Berechne Karte …");
   try {
@@ -789,6 +901,7 @@ async function refreshLayer() {
       syncControls();
     }
     redrawOverlay();
+    updateTimebar();
   } catch (err) {
     toast(err.message);
   } finally {
@@ -808,7 +921,7 @@ async function loadFrames() {
 }
 
 async function fetchFrames(key) {
-  loading(true, "Lade alle Jahreskarten …");
+  loading(true, "Lade Jahreskarten …");
   try {
     const qs = new URLSearchParams(commonParams()).toString();
     const res = await fetch(API + "frames?" + qs);
@@ -818,11 +931,7 @@ async function fetchFrames(key) {
     const years = [];
     for (let y = y0; y <= y1; y++) years.push(y);
     const data = new Int16Array(buf);
-    // Colour range for the animation: 99th percentile of |anomaly| over a sample of all years.
-    const sample = [];
-    for (let k = 0; k < data.length; k += 7) if (data[k] !== -32768) sample.push(Math.abs(data[k]) / 100);
-    sample.sort((a, b) => a - b);
-    const frames = { key, years, data, vmax: niceCeil(sample[Math.floor(sample.length * 0.99)] || 1) };
+    const frames = { key, years, data, vmax: robustMax(data) };
     if (key === framesKey()) state.frames = frames;
     return frames;
   } finally {
@@ -830,62 +939,322 @@ async function fetchFrames(key) {
   }
 }
 
+/** Colour range for animations: 99th percentile of |value| over a sample of all frames. */
+function robustMax(data, q = 0.985) {
+  const sample = [];
+  for (let k = 0; k < data.length; k += 7) if (data[k] !== -32768) sample.push(Math.abs(data[k]) / 100);
+  sample.sort((a, b) => a - b);
+  return niceCeil(sample[Math.floor(sample.length * q)] || 1);
+}
+
+// --- monthly maps, loaded per decade -----------------------------------------
+const monthlyKey = (decade) => `${state.ds}|${state.baseline}|${decade}`;
+const monthlyPending = new Map();
+async function loadMonthChunk(decade) {
+  const key = monthlyKey(decade);
+  if (state.monthly.has(key)) return state.monthly.get(key);
+  if (monthlyPending.has(key)) return monthlyPending.get(key);
+  const vmaxKey = `${state.ds}|${state.baseline}`;
+  const promise = (async () => {
+    const qs = new URLSearchParams({ ds: state.ds, baseline: state.baseline, res: "monthly", from: decade, to: decade + 9 });
+    const res = await fetch(API + "frames?" + qs);
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+    const [y0] = res.headers.get("X-Start").split("-").map(Number);
+    const count = Number(res.headers.get("X-Count"));
+    const data = new Int16Array(await res.arrayBuffer());
+    const chunk = { key, y0, count, data };
+    if (state.monthlyVmaxKey !== vmaxKey) { state.monthlyVmax = robustMax(data, 0.95) /* monthly values are noisier */; state.monthlyVmaxKey = vmaxKey; }
+    state.monthly.set(key, chunk);
+    while (state.monthly.size > 6) state.monthly.delete(state.monthly.keys().next().value);
+    return chunk;
+  })();
+  monthlyPending.set(key, promise);
+  try { return await promise; } finally { monthlyPending.delete(key); }
+}
+
+function lastDataMonth() {
+  const [y, m] = state.meta.dataset.last;
+  return { y, m };
+}
+
 async function showYearMode(req) {
   try {
     const f = await loadFrames();
     if (req !== layerReq || state.kind !== "year" || f.key !== framesKey()) return;
-    const slider = $("year-slider");
-    slider.min = f.years[0];
-    slider.max = f.years[f.years.length - 1];
-    if (!state.year || state.year > f.years[f.years.length - 1] || state.year < f.years[0]) state.year = f.years[f.years.length - 1];
-    slider.value = state.year;
     state.sigMask = null;
-    showYear();
+    if (state.res === "monthly") {
+      const first = state.meta.dataset.first[0];
+      const last = lastDataMonth();
+      if (!state.year || state.year < first || state.year > last.y) state.year = last.y;
+      if (state.year === last.y && state.month > last.m) state.month = last.m;
+      await showMonth();
+    } else {
+      const [y0, y1] = [f.years[0], f.years[f.years.length - 1]];
+      if (!state.year || state.year > y1 || state.year < y0) state.year = y1;
+      showYear();
+    }
   } catch (err) {
     toast(err.message);
   }
 }
 
-function showYear() {
-  const f = state.frames;
-  if (!f) return;
-  const i = f.years.indexOf(state.year);
-  if (i < 0) return;
+function fillGrid(data, i) {
   const g = geom();
   const n = g.nlat * g.nlon;
-  const grid = state.grid && state.grid.length === n && state.kind === "year" ? state.grid : new Float32Array(n);
+  const grid = state.grid && state.grid.length === n && !state.layer ? state.grid : new Float32Array(n);
   for (let k = 0; k < n; k++) {
-    const v = f.data[i * n + k];
+    const v = data[i * n + k];
     grid[k] = v === -32768 ? NaN : v / 100;
   }
+  state.layer = null;
   state.grid = grid;
-  $("year-out").textContent = state.year;
-  $("year-slider").value = state.year;
+}
+
+function showYear() {
+  const f = state.frames;
+  if (!f || state.kind !== "year") return;
+  const i = f.years.indexOf(state.year);
+  if (i < 0) return;
+  fillGrid(f.data, i);
+  afterFrame();
+}
+
+async function showMonth() {
+  const want = `${state.year}-${state.month}`;
+  const decade = Math.floor(state.year / 10) * 10;
+  let chunk = state.monthly.get(monthlyKey(decade));
+  if (!chunk) {
+    loading(true, "Lade Monatskarten …");
+    try { chunk = await loadMonthChunk(decade); } finally { loading(false); }
+  }
+  if (`${state.year}-${state.month}` !== want || state.kind !== "year" || state.res !== "monthly") return;
+  const i = (state.year - chunk.y0) * 12 + (state.month - 1);
+  if (i < 0 || i >= chunk.count) return;
+  fillGrid(chunk.data, i);
+  afterFrame();
+}
+
+function afterFrame() {
   redrawOverlay();
+  updateTimebar();
   if (!state.playing) writeHash();
 }
 
+/** Jump to a fractional year from the time bar. */
+function setTime(t) {
+  if (state.res === "monthly") {
+    state.year = Math.floor(t + 1e-6);
+    state.month = Math.min(12, Math.max(1, Math.round((t - state.year) * 12) + 1));
+    showMonth().catch((err) => toast(err.message));
+  } else {
+    state.year = Math.round(t);
+    showYear();
+  }
+}
+
+/** One animation step; false at the end of the data. */
+async function advance() {
+  if (state.res === "monthly") {
+    const last = lastDataMonth();
+    let { year, month } = state;
+    month += 1;
+    if (month > 12) { month = 1; year += 1; }
+    if (year > last.y || (year === last.y && month > last.m)) return false;
+    state.year = year;
+    state.month = month;
+    await showMonth();
+    // fetch the next decade early so the animation does not stall
+    const decade = Math.floor(year / 10) * 10;
+    if (year % 10 >= 7 && decade + 10 <= last.y) loadMonthChunk(decade + 10).catch(() => {});
+    return true;
+  }
+  const f = state.frames;
+  if (!f || state.year >= f.years[f.years.length - 1]) return false;
+  state.year += 1;
+  showYear();
+  return true;
+}
+
 let playTimer;
-function togglePlay() {
+async function playStep() {
+  if (!state.playing) return;
+  const t0 = performance.now();
+  let more;
+  try { more = await advance(); } catch (err) { toast(err.message); more = false; }
+  if (!state.playing) return;
+  if (!more) { togglePlay(); return; }
+  const delay = (state.res === "monthly" ? 110 : 190) / state.speed;
+  playTimer = setTimeout(playStep, Math.max(0, delay - (performance.now() - t0)));
+}
+
+async function togglePlay() {
+  if (!state.playing && state.kind !== "year") {
+    // ▶ in a trend view: play the chosen period as a time-lapse
+    const from = state.start;
+    state.kind = "year";
+    state.year = from;
+    syncControls();
+    writeHash();
+    await refreshLayer();
+  }
   state.playing = !state.playing;
   $("btn-play").textContent = state.playing ? "❚❚" : "▶";
+  $("btn-play").setAttribute("aria-label", state.playing ? "Anhalten" : "Zeitraffer abspielen");
+  document.body.classList.toggle("playing", state.playing);
+  clearTimeout(playTimer);
   if (state.playing) {
-    const f = state.frames;
-    if (!f) { state.playing = false; return; }
+    if (state.res !== "monthly" && !state.frames) { state.playing = false; return; }
     overlayCanvas.width = overlayCanvas.height = 1024; // lighter frames while animating
-    if (state.year >= f.years[f.years.length - 1]) state.year = f.years[0];
-    playTimer = setInterval(() => {
-      const last = f.years[f.years.length - 1];
-      if (state.year >= last) { togglePlay(); return; }
-      state.year += 1;
-      showYear();
-    }, 160);
+    const last = lastDataMonth();
+    const atEnd = state.res === "monthly"
+      ? state.year === last.y && state.month >= last.m
+      : state.year >= state.frames.years[state.frames.years.length - 1];
+    if (atEnd) {
+      state.year = state.res === "monthly" ? Math.max(state.meta.dataset.first[0], last.y - 30) : state.frames.years[0];
+      state.month = 1;
+      if (state.res === "monthly") await showMonth(); else showYear();
+    }
+    playTimer = setTimeout(playStep, 120);
   } else {
-    clearInterval(playTimer);
     overlayCanvas.width = overlayCanvas.height = 1536;
     redrawOverlay();
     writeHash();
   }
+}
+
+// --- visible area & time bar ------------------------------------------------
+function updateView() {
+  if (!map || !state.meta) return;
+  const g = geom();
+  const el = map.getContainer();
+  const W = el.clientWidth, H = el.clientHeight;
+  const center = map.getCenter();
+  const w = new Float32Array(g.nlat * g.nlon);
+  let shown = 0, total = 0;
+  for (let r = 0; r < g.nlat; r++) {
+    const lat = g.lat0 + r * g.dlat;
+    const cw = Math.cos((lat * Math.PI) / 180);
+    const plat = Math.max(-MERC_MAX_LAT, Math.min(MERC_MAX_LAT, lat));
+    for (let c = 0; c < g.nlon; c++) {
+      total += cw;
+      const lon = g.lon0 + c * g.dlon;
+      if (state.globe && angularDistance(center.lng, center.lat, lon, lat) > 86) continue;
+      for (const off of state.globe ? [0] : [0, -360, 360]) {
+        const p = map.project([lon + off, plat]);
+        if (p.x >= 0 && p.x <= W && p.y >= 0 && p.y <= H) { w[r * g.nlon + c] = cw; shown += cw; break; }
+      }
+    }
+  }
+  state.view = w;
+  state.viewAll = shown > 0.97 * total;
+  state.viewHemisphere = !state.viewAll && shown > 0.42 * total;
+  computeViewSeries();
+  updateTimebar();
+}
+
+function weightedMean(grid, weights, offset = 0) {
+  let s = 0, sw = 0, all = 0;
+  const n = weights.length;
+  for (let k = 0; k < n; k++) {
+    const w = weights[k];
+    if (!w) continue;
+    all += w;
+    const v = grid[offset + k];
+    if (v === v && v !== -32768) { s += v * w; sw += w; }
+  }
+  return sw > all / 3 ? s / sw : null;
+}
+
+function computeViewSeries() {
+  const f = state.frames;
+  if (!f || !state.view || f.key !== framesKey()) { state.viewSeries = null; return; }
+  const n = state.view.length;
+  const out = new Float32Array(f.years.length);
+  for (let i = 0; i < f.years.length; i++) {
+    const m = weightedMean(f.data, state.view, i * n);
+    out[i] = m == null ? NaN : m / 100;
+  }
+  state.viewSeries = out;
+}
+
+function viewTrend() {
+  const f = state.frames, s = state.viewSeries;
+  if (!f || !s) return null;
+  let n = 0, sx = 0, sy = 0, sxx = 0, sxy = 0;
+  f.years.forEach((y, i) => {
+    const v = s[i];
+    if (y < state.start || y > state.end || !Number.isFinite(v)) return;
+    n++; sx += y; sy += v; sxx += y * y; sxy += y * v;
+  });
+  if (n < 8) return null;
+  const slope = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+  return { slope, intercept: (sy - slope * sx) / n };
+}
+
+function updateTimebar() {
+  if (!timebar || !state.meta) return;
+  const f = state.frames;
+  const ds = state.meta.dataset;
+  const monthly = state.kind === "year" && state.res === "monthly";
+  const domain = [f?.years[0] ?? ds.first[0], monthly ? ds.last[0] : f?.years[f.years.length - 1] ?? ds.last[0]];
+  const vals = state.viewSeries ? Array.from(state.viewSeries) : [];
+  const finite = vals.filter(Number.isFinite).map(Math.abs).sort((a, b) => a - b);
+  const m = niceCeil(finite[Math.floor(finite.length * 0.95)] || 1);
+  const props = { domain, years: f?.years || [], values: vals, scale: { kind: scaleKind(), min: -m, max: m } };
+  if (state.kind === "year") {
+    props.mode = "point";
+    props.step = monthly ? 1 / 12 : 1;
+    props.value = monthly ? state.year + (state.month - 1) / 12 : state.year ?? domain[1];
+    props.maxValue = monthly ? ds.last[0] + (ds.last[1] - 1) / 12 : domain[1];
+  } else {
+    props.mode = "range";
+    props.range = [state.start, state.end];
+    props.maxYear = lastFullYear();
+    props.trend = viewTrend();
+  }
+  timebar.set(props);
+  updateReadout(props.trend);
+}
+
+function updateReadout(trend) {
+  const label = state.viewAll ? "Ganze Welt" : state.viewHemisphere ? "Sichtbare Hälfte" : "Sichtbarer Ausschnitt";
+  let value = "–";
+  if (state.view) {
+    if (state.kind === "year") {
+      const v = state.grid ? weightedMean(state.grid, state.view) : null;
+      if (v != null) value = `${charts.fmt(v, 2)} ${unitOf()}`;
+    } else if (trend) {
+      value = `${charts.fmt(trend.slope * 10, trendDigits())} ${trendShort()}`;
+    }
+  }
+  $("tb-readout").querySelector(".tb-label").textContent = state.kind === "year" ? label : `Trend · ${label}`;
+  $("tb-value").textContent = value;
+  $("btn-view-region").hidden = !!state.viewAll;
+}
+
+function addViewAsRegion() {
+  if (!state.view) return;
+  const g = geom();
+  const lats = [], lonSet = new Set();
+  for (let r = 0; r < g.nlat; r++) for (let c = 0; c < g.nlon; c++) {
+    if (state.view[r * g.nlon + c]) { lats.push(g.lat0 + r * g.dlat); lonSet.add(c); }
+  }
+  if (!lats.length) return;
+  // longitudes: the visible columns form one arc; start after the largest gap
+  const cols = [...lonSet].sort((a, b) => a - b);
+  let gap = -1, at = 0;
+  for (let i = 0; i < cols.length; i++) {
+    const next = i + 1 < cols.length ? cols[i + 1] : cols[0] + g.nlon;
+    if (next - cols[i] > gap) { gap = next - cols[i]; at = i; }
+  }
+  const startCol = cols[(at + 1) % cols.length];
+  const span = (cols.length === g.nlon ? g.nlon : g.nlon - gap + 1);
+  const w = g.lon0 + startCol * g.dlon - g.dlon / 2;
+  const e = Math.min(w + 360, w + span * g.dlon);
+  const s = Math.max(-90, Math.min(...lats) - g.dlat / 2);
+  const n = Math.min(90, Math.max(...lats) + g.dlat / 2);
+  const bbox = [w, s, e, n].map((v) => Math.round(v * 100) / 100);
+  addRegion({ bbox, name: `Ausschnitt ${fmtLatLon(n, w)} – ${fmtLatLon(s, e)}` });
 }
 
 // ---------------------------------------------------------------------------
@@ -940,7 +1309,10 @@ function addRegion(spec, { silent = false } = {}) {
   const color = COLORS.find((c) => !used.has(c));
   const name = spec.preset ? presetById[spec.preset]?.name || spec.preset : spec.name || "Eigene Region";
   state.regions.push({ uid: ++uidCounter, spec, name, color });
-  if (!silent) { renderSelected(); drawRegionsOnMap(); refreshRegions(); writeHash(); }
+  if (!silent) {
+    renderSelected(); drawRegionsOnMap(); refreshRegions(); writeHash();
+    if (state.regions.length === 1) setAnalysisOpen(true);
+  }
 }
 
 function removeRegion(uid) {
@@ -971,7 +1343,8 @@ function renderSelected() {
     li.querySelector(".name").style.cursor = "pointer";
     ul.appendChild(li);
   }
-  $("selected-hint").hidden = state.regions.length > 0 && state.regions.length >= 2;
+  $("selected-hint").hidden = state.regions.length > 0;
+  $("region-count").textContent = state.regions.length ? String(state.regions.length) : "";
   for (const b of document.querySelectorAll("[data-preset]")) {
     b.classList.toggle("active", state.regions.some((r) => r.spec.preset === b.dataset.preset));
   }
@@ -1065,7 +1438,7 @@ function layoutChips() {
   const center = map.getCenter();
   // Floating panels count as occupied space.
   const area = $("map").getBoundingClientRect();
-  const placed = [...document.querySelectorAll("#controls, #legend, .map-tools, .maplibregl-ctrl-top-right, #timeline:not([hidden])")]
+  const placed = [...document.querySelectorAll("#controls, #legend, #regions-panel, #timebar, #headline")]
     .map((e) => e.getBoundingClientRect())
     .filter((r) => r.width && r.height)
     .map((r) => ({ x: r.left - area.left, y: r.top - area.top, w: r.width, h: r.height }));
@@ -1294,7 +1667,14 @@ async function renderAnalysis() {
   const series = seriesForCharts();
   const needRegions = ["series", "tempo", "stripes", "seasons", "stats", "dist"].includes(state.tab);
   if (needRegions && !series.length) {
-    body.innerHTML = `<div class="empty">Wähle rechts Regionen aus – oder klicke eine Stelle auf der Karte an.</div>`;
+    body.innerHTML = `<div class="empty"><b>Noch keine Region gewählt.</b><br>Klicke eine Stelle auf der Karte an, suche oben rechts nach einem Ort oder zieh mit ▭ ein Rechteck auf.<br>Ohne Auswahl funktionieren <a href="#" data-tab-link="ranking">Ranking</a> und <a href="#" data-tab-link="zonal">Breitengrade</a>.</div>`;
+    body.querySelectorAll("[data-tab-link]").forEach((a) => a.addEventListener("click", (e) => {
+      e.preventDefault();
+      state.tab = a.dataset.tabLink;
+      syncControls();
+      renderAnalysis();
+      writeHash();
+    }));
     return;
   }
   try {
@@ -1570,7 +1950,8 @@ async function main() {
   try {
     state.meta = await getJSON("meta", { ds: state.ds });
   } catch (err) {
-    $("dataset-line").textContent = "Datensatz konnte nicht geladen werden: " + err.message;
+    $("hl-time").textContent = "Datensatz nicht verfügbar";
+    $("hl-sub").textContent = err.message;
     return;
   }
   const ds = state.meta.dataset;
@@ -1580,8 +1961,16 @@ async function main() {
   state.year = state.end;
   buildControls();
   configureCharts();
-  if (!readHash()) for (const spec of DEFAULT_REGIONS) addRegion(spec, { silent: true });
+  readHash();
   if (!state.end) state.end = lastFullYear();
+  // The analysis drawer starts closed until there is something to analyse.
+  const hasTab = new URLSearchParams(location.hash.slice(1)).has("t");
+  if (!state.regions.length && !hasTab) {
+    document.querySelector(".layout").classList.add("analysis-collapsed");
+    $("btn-toggle-analysis").textContent = "▴";
+  } else {
+    $("btn-toggle-analysis").textContent = "▾";
+  }
   syncControls();
   renderSelected();
   initMap();

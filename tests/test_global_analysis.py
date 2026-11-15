@@ -207,6 +207,24 @@ class LayerTest(unittest.TestCase):
         _, grid = ga.seasonal_grid(self.ds)
         self.assertAlmostEqual(arr[-1, 3, 3] / 100, float(grid[-1, 3, 3]), places=2)
 
+    def test_monthly_frames(self):
+        (y0, m0), count, payload = ga.monthly_frames(self.ds, 1990, 2050)
+        self.assertEqual((y0, m0), (1990, 1))
+        last_y, last_m = self.ds.last_month
+        self.assertEqual(count, (last_y - 1990) * 12 + last_m)
+        arr = np.frombuffer(payload, dtype="<i2").reshape(count, self.ds.lats.size, self.ds.lons.size)
+        k = int(np.nonzero((self.ds.years == 1990) & (self.ds.months == 3))[0][0])
+        self.assertAlmostEqual(arr[2, 3, 3] / 100, float(self.ds.values[k, 3, 3]), places=2)
+        # a different baseline shifts every month by its own climatology
+        _, _, shifted = ga.monthly_frames(self.ds, 1990, 1990, baseline="1981-2010")
+        arr2 = np.frombuffer(shifted, dtype="<i2").reshape(12, self.ds.lats.size, self.ds.lons.size)
+        self.assertLess(arr2[2, 3, 3], arr[2, 3, 3])
+        # long ranges are capped
+        _, count, _ = ga.monthly_frames(self.ds, 1900, 2000)
+        self.assertEqual(count, ga.MAX_MONTHLY_YEARS * 12)
+        with self.assertRaises(ga.AnalysisInputError):
+            ga.monthly_frames(self.ds, "abc", 2000)
+
     def test_zonal(self):
         z = ga.zonal(self.ds)
         self.assertEqual(len(z["values"]), len(z["years"]) * len(z["lats"]))
@@ -315,6 +333,8 @@ class ApiTest(unittest.TestCase):
         _, h = self.get("/api/global/frames")
         self.assertEqual(h.status, 200)
         self.assertGreater(len(h.wfile.getvalue()), 0)
+        _, h = self.get("/api/global/frames", "res=monthly&from=1990&to=1999")
+        self.assertEqual((h.status, h.headers["X-Start"], h.headers["X-Count"]), (200, "1990-01", "120"))
 
     def test_errors(self):
         for path, query in [

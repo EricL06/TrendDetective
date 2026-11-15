@@ -6,6 +6,7 @@ be cached by the browser per URL:
 * ``meta``                      dataset, grid, seasons, baselines, layers, presets
 * ``layer?kind&start&end&season&baseline``   one map layer (flat grid)
 * ``frames?season&baseline``    all yearly anomaly maps, binary int16 (1/100 °C)
+* ``frames?res=monthly&from&to&baseline``  monthly maps (≤ 20 years per call)
 * ``regions?ids=a,b&custom=<json>&start&end&season&baseline``  region comparison
 * ``cell?lat&lon&...``          series of one 2° grid cell
 * ``ranking?start&end&season&baseline``      trends of all preset regions
@@ -15,6 +16,7 @@ be cached by the browser per URL:
 
 from __future__ import annotations
 
+import gzip
 import importlib
 import json
 from pathlib import Path
@@ -121,6 +123,21 @@ _JSON_ROUTES: dict[str, Callable[[gd.GriddedDataset, dict[str, list[str]]], Any]
 }
 
 
+def _send_binary(handler: Any, payload: bytes, headers: dict[str, str]) -> None:
+    """Binary answer, gzip-compressed when the client accepts it (frames are a few MB)."""
+    request_headers = getattr(handler, "request_headers", None) or getattr(handler, "headers", None) or {}
+    if "gzip" in (request_headers.get("Accept-Encoding") or ""):
+        payload = gzip.compress(payload, compresslevel=4)
+        headers = {**headers, "Content-Encoding": "gzip"}
+    handler.send_response(200)
+    handler.send_header("Content-Type", "application/octet-stream")
+    handler.send_header("Content-Length", str(len(payload)))
+    for key, value in headers.items():
+        handler.send_header(key, value)
+    handler.end_headers()
+    handler.wfile.write(payload)
+
+
 def handle_get(handler: Any, path: str, query: str) -> bool:
     """Answer ``/api/global/...``; return False for other paths."""
     if not path.startswith(PREFIX):
@@ -135,14 +152,15 @@ def handle_get(handler: Any, path: str, query: str) -> bool:
         except KeyError:
             raise ga.AnalysisInputError(f"Unbekannter Datensatz: {key}") from None
         if name == "frames":
-            years, payload = ga.frames(ds, **_common(params))
-            handler.send_response(200)
-            handler.send_header("Content-Type", "application/octet-stream")
-            handler.send_header("Content-Length", str(len(payload)))
-            handler.send_header("X-Years", f"{years[0]}-{years[-1]}")
-            handler.send_header("X-Grid", f"{ds.lats.size}x{ds.lons.size}")
-            handler.end_headers()
-            handler.wfile.write(payload)
+            headers = {"X-Grid": f"{ds.lats.size}x{ds.lons.size}"}
+            if _q(params, "res") == "monthly":
+                (y0, m0), count, payload = ga.monthly_frames(
+                    ds, _q(params, "from"), _q(params, "to"), _q(params, "baseline"))
+                headers.update({"X-Start": f"{y0}-{m0:02d}", "X-Count": str(count)})
+            else:
+                years, payload = ga.frames(ds, **_common(params))
+                headers["X-Years"] = f"{years[0]}-{years[-1]}"
+            _send_binary(handler, payload, headers)
             return True
         route = _JSON_ROUTES.get(name)
         if route is None:

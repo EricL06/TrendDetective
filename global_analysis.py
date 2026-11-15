@@ -596,6 +596,57 @@ def frames(ds: GriddedDataset, season: str = "annual", baseline: str | None = No
     return [int(y) for y in years], scaled.tobytes()
 
 
+MAX_MONTHLY_YEARS = 20
+
+
+def _monthly_reference(ds: GriddedDataset, base: tuple[int, int]) -> np.ndarray | None:
+    """Per-month shift ``[12, lat, lon]`` from the dataset's own baseline to ``base``."""
+    if tuple(ds.baseline) == tuple(base):
+        return None
+
+    def build() -> np.ndarray:
+        years, cube = _monthly_cube(ds)
+        sel = (years >= base[0]) & (years <= base[1])
+        part = cube[sel]
+        count = np.isfinite(part).sum(axis=0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            ref = np.nanmean(part, axis=0)
+        ref[count < max(1, int(sel.sum() * 2 / 3))] = np.nan
+        return ref.astype(np.float32)
+
+    return _cached((id(ds), "mref", base), build)
+
+
+def monthly_frames(ds: GriddedDataset, start: Any, end: Any,
+                   baseline: str | None = None) -> tuple[tuple[int, int], int, bytes]:
+    """Monthly anomaly maps from January ``start`` on, int16 in 1/100 unit.
+
+    Returns ``((first_year, 1), month_count, payload)``; the range is clipped to the
+    data and to ``MAX_MONTHLY_YEARS`` so a single answer stays a few MB.
+    """
+    years, cube = _monthly_cube(ds)
+    first, last = int(years[0]), int(years[-1])
+    try:
+        y0 = max(first, int(start))
+        y1 = min(last, int(end), y0 + MAX_MONTHLY_YEARS - 1)
+    except (TypeError, ValueError) as exc:
+        raise AnalysisInputError("from/to müssen Jahreszahlen sein") from exc
+    if y1 < y0:
+        raise AnalysisInputError(f"Keine Monatsdaten im Bereich {start}–{end} ({first}–{last})")
+    part = cube[y0 - first: y1 - first + 1]
+    ref = _monthly_reference(ds, _baseline(baseline, ds))
+    if ref is not None:
+        part = part - ref[None]
+    flat = part.reshape((-1,) + part.shape[2:])
+    last_y, last_m = ds.last_month
+    count = flat.shape[0]
+    if y1 == last_y:
+        count -= 12 - last_m
+    scaled = np.round(np.nan_to_num(flat[:count], nan=-327.68) * 100)
+    return (y0, 1), count, np.clip(scaled, -32768, 32767).astype("<i2").tobytes()
+
+
 def cell_series(ds: GriddedDataset, lat: float, lon: float, season: str = "annual",
                 baseline: str | None = None) -> dict[str, Any]:
     region = parse_region({"point": [lon, lat], "name": f"{lat:.1f}°, {lon:.1f}°"})
