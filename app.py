@@ -7,7 +7,7 @@ button click events at ``POST /api/buttons/<button_id>`` to the single method
 bound to that button; 'Apply' answers with its result in the same response and
 the server keeps no state between requests. ``GET /api/places?q=<name>`` looks up
 cities and regions; ``POST /api/coverage`` tells when the stations of a selection
-have data; ``POST /api/evolution`` describes how a value per year changes (:mod:`evolution`); ``POST /api/correlate``
+have data; ``POST /api/stations`` lists the stations of a box drawn on the map; ``POST /api/evolution`` describes how a value per year changes (:mod:`evolution`); ``POST /api/correlate``
 correlates the topics of one request, also at lags (:mod:`correlation`); ``GET /api/examples`` lists famous events to start from (:mod:`examples`).
 """
 
@@ -338,6 +338,57 @@ class WebAppHandler(SimpleHTTPRequestHandler):
             return
         self._send_json(200, result)
 
+    def _handle_stations(self) -> None:
+        """List the stations of a box drawn on the map (``POST /api/stations``).
+
+        Expects ``{"area": <box selection>, "topics": [topic, ...],
+        "timeintervall": [DD.MM.YYYY, DD.MM.YYYY]}`` and answers with
+        ``{"bbox": [...], "area_km2": ..., "topics": {topic: stations_in_box(...)}}``
+        (see :func:`area_analysis.stations_in_box`). The topics are looked up in parallel.
+
+        :return: None
+        :rtype: None
+        """
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+            if not isinstance(body, dict):
+                raise ValueError("Body must be a JSON object.")
+            region = area_analysis.box_region(body.get("area"))
+            if region is None:
+                raise ValueError("Draw a box on the map first.")
+            topics = [str(t) for t in body.get("topics") or [] if str(t)][:8]
+            if not topics:
+                raise ValueError("Choose at least one variable.")
+            dates = body.get("timeintervall") or []
+            start = station_coverage._parse_dd_mm_yyyy(dates[0]) if len(dates) == 2 else None
+            end = station_coverage._parse_dd_mm_yyyy(dates[1]) if len(dates) == 2 else None
+            if start is None or end is None or start > end:
+                raise ValueError("Enter a valid time range (DD.MM.YYYY).")
+        except (json.JSONDecodeError, ValueError) as exc:
+            self._send_json(400, {"error": str(exc)})
+            return
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        def lookup(topic: str) -> dict[str, Any]:
+            try:
+                return area_analysis.stations_in_box(region.bbox, topic, start, end)
+            except (RuntimeError, ValueError, OSError) as exc:
+                return {"topic": topic, "stations": [], "total": 0, "errors": [str(exc)]}
+
+        with ThreadPoolExecutor(max_workers=min(4, len(topics))) as pool:
+            results = dict(zip(topics, pool.map(lookup, topics)))
+        self._send_json(
+            200,
+            {
+                "bbox": list(region.bbox),
+                "area_km2": round(area_analysis.box_area_km2(region.bbox)),
+                "problem": area_analysis.box_problem(region),
+                "topics": results,
+            },
+        )
+
     def _stream_apply(self, app_interface: interface.AppInterface) -> None:
         """Answer 'Apply' progressively (``POST /api/buttons/apply/stream``).
 
@@ -406,6 +457,10 @@ class WebAppHandler(SimpleHTTPRequestHandler):
 
         if self.path == "/api/coverage":
             self._handle_coverage()
+            return
+
+        if self.path == "/api/stations":
+            self._handle_stations()
             return
 
         if self.path == "/api/evolution":
