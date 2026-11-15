@@ -163,6 +163,17 @@ select it with the `provider` keyword while NOAA remains the default. Station
 databases can subclass `station_sources.StationSource`, which implements the
 point request and is used by the region evaluation.
 
+## Run the checks
+
+```bash
+.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
+.venv/bin/python -m unittest src.test_task
+cd map-widget && npm run lint && npx tsc -b
+```
+
+The Python tests run offline. The map widget has no automated tests; see
+`map-widget/DEVELOPMENT.md` §12 for the manual checklist.
+
 ## Build the API reference
 
 The Sphinx documentation source is in `docs/`. Install the documentation

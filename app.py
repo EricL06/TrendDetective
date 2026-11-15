@@ -16,6 +16,7 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler, ThreadingHTTPServe
 import importlib
 import json
 import math
+import threading
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -33,6 +34,7 @@ BASE_DIR: Path = Path(__file__).resolve().parent
 INTERFACE_FILE: Path = BASE_DIR / "interface.py"
 _LAST_MTIME: float = INTERFACE_FILE.stat().st_mtime
 INTERFACE: interface.AppInterface = interface.AppInterface()
+_INTERFACE_LOCK = threading.Lock()
 
 
 def get_interface() -> interface.AppInterface:
@@ -42,12 +44,13 @@ def get_interface() -> interface.AppInterface:
     :rtype: interface.AppInterface
     """
     global _LAST_MTIME, INTERFACE
-    current_mtime = INTERFACE_FILE.stat().st_mtime
-    if current_mtime != _LAST_MTIME:
-        importlib.reload(interface)
-        INTERFACE = interface.AppInterface()
-        _LAST_MTIME = current_mtime
-    return INTERFACE
+    with _INTERFACE_LOCK:  # one reload at a time under ThreadingHTTPServer
+        current_mtime = INTERFACE_FILE.stat().st_mtime
+        if current_mtime != _LAST_MTIME:
+            importlib.reload(interface)
+            INTERFACE = interface.AppInterface()
+            _LAST_MTIME = current_mtime
+        return INTERFACE
 
 
 def new_request_interface() -> interface.AppInterface:
