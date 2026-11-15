@@ -112,8 +112,12 @@
         return `${sign}${s}${unit ? (unit.startsWith('%') ? unit : ` ${unit}`) : ''}`;
     }
 
+    // Chance as a percentage, two significant digits without exponent notation (1 → "100 %").
     function pct(p) {
-        return `${(p * 100).toPrecision(2)} %`;
+        const v = p * 100;
+        if (v >= 10) return `${Math.round(v)} %`;
+        if (v < 0.1) return '< 0.1 %';
+        return `${Number(v.toPrecision(2))} %`;
     }
 
     function parseDate(text) {
