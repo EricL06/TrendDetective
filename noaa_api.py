@@ -57,13 +57,44 @@ used to size the box. About 1 degree collects enough reports at sea; a
 smaller box often holds only a handful of passing ships per month.
 """
 
-MAX_MARINE_MONTHS: int = 120
-"""Longest marine request (months). Reports are fetched month by month; ten
-years take about two minutes. Longer ranges get a clear error pointing to the
-ERA5 topics instead of a request that runs into a timeout."""
+MAX_MARINE_MONTHS: int = 24
+"""Longest marine request (months). Reports are fetched month by month (about
+14 s each, two at a time, so two years take about three minutes; past months
+are cached); a busy box near a coast holds ~90,000 reports per month. Longer
+ranges get a clear error pointing to the ERA5 topics instead of a request
+that runs into a timeout."""
 
-MARINE_PARALLEL_REQUESTS: int = 4
-"""Marine months fetched at the same time."""
+MARINE_THIN_HOURS: int = 3
+"""One report per platform in each block of this many hours is kept."""
+
+
+def _thin_marine_rows(rows: list[Any]) -> list[Any]:
+    """Keep one raw report per platform and :data:`MARINE_THIN_HOURS`-hour block.
+
+    Moored buoys report every 10 minutes; for daily or longer intervals one
+    report every few hours per platform carries the same information at a
+    fraction of the memory (91,510 -> a few thousand rows for a month off Boston).
+    """
+    kept: list[Any] = []
+    seen: set[tuple[Any, str, int]] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        stamp = str(row.get("DATE") or "")
+        try:
+            hour = int(stamp[11:13]) if len(stamp) >= 13 else 0
+        except ValueError:
+            hour = 0
+        key = (row.get("STATION"), stamp[:10], hour // MARINE_THIN_HOURS)
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(row)
+    return kept
+
+MARINE_PARALLEL_REQUESTS: int = 2
+"""Marine months fetched at the same time. Two run as fast as one; with four,
+NOAA stalled every request until the 120 s limit."""
 
 MARINE_CACHE_DIR: Path = Path("data/cache/marine")
 """Finished past months are stored here; ship reports of a past month do not change."""
@@ -94,7 +125,8 @@ def _clean_marine_rows(collections: list[list[dict[str, Any]]]) -> list[list[dic
     * ``visibility`` codes 90-99 become kilometres,
     * one report per platform, variable and hour is kept: a moored buoy
       reporting every 10 minutes would otherwise outweigh every ship in the
-      box (4,459 of 4,628 rows in one test month).
+      box (4,459 of 4,628 rows in one test month). Raw rows are already
+      thinned per download (:func:`_thin_marine_rows`).
     """
     cleaned: list[list[dict[str, Any]]] = []
     for collection in collections:
@@ -1064,7 +1096,7 @@ class NOAAClient:
                     pass
             client = NOAAClient(timeout=self.timeout, max_request_seconds=self.max_request_seconds)
             rows = client._get_json(BASE_URL, {**params, "startDate": first.isoformat(), "endDate": last.isoformat()})
-            rows = rows if isinstance(rows, list) else []
+            rows = _thin_marine_rows(rows if isinstance(rows, list) else [])
             if last < recent:
                 try:
                     cache.parent.mkdir(parents=True, exist_ok=True)
