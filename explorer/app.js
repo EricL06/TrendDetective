@@ -45,6 +45,7 @@ const state = {
   season: "annual",
   baseline: "1951-1980",
   sig: true,
+  mapCharts: true,
   smooth: true,
   globe: true,
   opacity: 0.82,
@@ -260,6 +261,7 @@ function buildListeners() {
   $("opt-sig").addEventListener("change", (e) => { state.sig = e.target.checked; redrawOverlay(); });
   $("opt-smooth").addEventListener("change", (e) => { state.smooth = e.target.checked; redrawOverlay(); });
   $("opt-globe").addEventListener("change", (e) => { state.globe = e.target.checked; applyProjection(); });
+  $("opt-mapcharts").addEventListener("change", (e) => { state.mapCharts = e.target.checked; drawRegionMarkers(); });
   $("opacity").addEventListener("input", (e) => {
     state.opacity = Number(e.target.value);
     if (map?.getLayer("overlay")) map.setPaintProperty("overlay", "raster-opacity", state.opacity);
@@ -415,6 +417,8 @@ function initMap() {
   map.on("mousemove", onMapHover);
   map.on("mouseout", () => ($("hover-card").hidden = true));
   map.on("click", onMapClick);
+  map.on("move", scheduleChipLayout);
+  map.on("resize", scheduleChipLayout);
   setupDrawing();
 }
 
@@ -984,6 +988,109 @@ function drawRegionsOnMap() {
   src.setData({ type: "FeatureCollection", features });
 }
 
+// --- mini charts on the map ---------------------------------------------------
+// Chips are laid out in screen space on every map render: each sits next to its
+// region's anchor, overlaps are resolved greedily and a leader line keeps the link.
+let chipItems = []; // {el, lon, lat, color}
+let chipFrame = 0;
+
+function drawRegionMarkers() {
+  const layer = $("chip-layer");
+  layer.querySelectorAll(".map-chip").forEach((e) => e.remove());
+  chipItems = [];
+  if (!map || !state.mapCharts || !state.regionData) { layoutChips(); return; }
+  const startIdx = state.regionData.years.indexOf(state.start);
+  const sl = (arr) => (startIdx > 0 ? arr.slice(startIdx) : arr);
+  for (const r of state.regions) {
+    const info = regionInfo(r);
+    const ring = outlineFor(r);
+    if (!info || !ring) continue;
+    const xs = ring.map((p) => p[0]), ys = ring.map((p) => p[1]);
+    const lat = Math.max(-80, Math.min(80, (Math.min(...ys) + Math.max(...ys)) / 2));
+    const band = Math.max(...xs) - Math.min(...xs) > 300;
+    if (band && Math.abs(lat) < 55) continue; // global/hemisphere bands have no sensible anchor
+    const st = info.stats || {};
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "map-chip";
+    el.style.setProperty("--c", r.color);
+    el.innerHTML = `<span class="mc-name">${charts.escapeHtml(charts.truncate(r.name, 16))}</span>`
+      + charts.sparkline(sl(state.regionData.years), sl(info.values), sl(info.running), { width: 84, height: 22, color: r.color })
+      + `<span class="mc-val">${st.trend != null ? charts.fmt(st.trend, trendDigits()) : "–"}<small> ${trendShort()}</small></span>`;
+    el.title = `${r.name}: Klick zeigt die Statistik`;
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.tab = "stats";
+      syncControls();
+      renderAnalysis();
+      writeHash();
+    });
+    layer.appendChild(el);
+    chipItems.push({ el, lon: (Math.min(...xs) + Math.max(...xs)) / 2, lat, band, color: r.color });
+  }
+  layoutChips();
+}
+
+function angularDistance(lon1, lat1, lon2, lat2) {
+  const r = Math.PI / 180;
+  const c = Math.sin(lat1 * r) * Math.sin(lat2 * r) + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.cos((lon1 - lon2) * r);
+  return Math.acos(Math.max(-1, Math.min(1, c))) / r;
+}
+
+function layoutChips() {
+  chipFrame = 0;
+  const svg = $("chip-lines");
+  svg.innerHTML = "";
+  if (!chipItems.length || !map) return;
+  const W = $("map").clientWidth, H = $("map").clientHeight;
+  const center = map.getCenter();
+  // Floating panels count as occupied space.
+  const area = $("map").getBoundingClientRect();
+  const placed = [...document.querySelectorAll("#controls, #legend, .map-tools, .maplibregl-ctrl-top-right, #timeline:not([hidden])")]
+    .map((e) => e.getBoundingClientRect())
+    .filter((r) => r.width && r.height)
+    .map((r) => ({ x: r.left - area.left, y: r.top - area.top, w: r.width, h: r.height }));
+  const items = chipItems.map((it) => {
+    const lon = it.band ? center.lng : it.lon;
+    const visible = !state.globe || angularDistance(center.lng, center.lat, lon, it.lat) < 80;
+    const p = map.project([lon, it.lat]);
+    return { ...it, p, visible, w: it.el.offsetWidth || 110, h: it.el.offsetHeight || 52 };
+  });
+  const overlaps = (a) => a.x < 4 || a.y < 4 || a.x + a.w > W - 4 || a.y + a.h > H - 4
+    || placed.some((b) => a.x < b.x + b.w + 4 && b.x < a.x + a.w + 4 && a.y < b.y + b.h + 4 && b.y < a.y + a.h + 4);
+  for (const it of items.sort((a, b) => a.p.y - b.p.y)) {
+    if (!it.visible || it.p.x < -50 || it.p.x > W + 50 || it.p.y < -50 || it.p.y > H + 50) { it.el.style.display = "none"; continue; }
+    it.el.style.display = "";
+    const g = 12;
+    const candidates = [
+      [-it.w / 2, -it.h - g], [g, -it.h / 2], [-it.w - g, -it.h / 2], [-it.w / 2, g],
+      [g, -it.h - g], [-it.w - g, -it.h - g], [g, g], [-it.w - g, g],
+    ];
+    for (let ring = 1; ring <= 4; ring++) {
+      candidates.push([-it.w / 2, -it.h - g - ring * (it.h + 8)], [g + ring * (it.w + 8), -it.h / 2], [-it.w - g - ring * (it.w + 8), -it.h / 2], [-it.w / 2, g + ring * (it.h + 8)]);
+    }
+    let box = null;
+    for (const [dx, dy] of candidates) {
+      const b = { x: it.p.x + dx, y: it.p.y + dy, w: it.w, h: it.h };
+      if (!overlaps(b)) { box = b; break; }
+    }
+    box ||= { x: it.p.x - it.w / 2, y: it.p.y - it.h - g, w: it.w, h: it.h };
+    placed.push(box);
+    it.el.style.transform = `translate(${Math.round(box.x)}px, ${Math.round(box.y)}px)`;
+    // leader line from the anchor to the nearest point of the chip
+    const tx = Math.max(box.x, Math.min(it.p.x, box.x + box.w));
+    const ty = Math.max(box.y, Math.min(it.p.y, box.y + box.h));
+    svg.insertAdjacentHTML("beforeend",
+      `<line x1="${it.p.x}" y1="${it.p.y}" x2="${tx}" y2="${ty}" stroke="${it.color}" stroke-width="1.5" stroke-opacity="0.9"/>`
+      + `<circle cx="${it.p.x}" cy="${it.p.y}" r="3.5" fill="${it.color}" stroke="#05080d" stroke-width="1.5"/>`);
+  }
+}
+
+function scheduleChipLayout() {
+  if (chipFrame || !chipItems.length) return;
+  chipFrame = requestAnimationFrame(layoutChips);
+}
+
 function zoomToRegion(r) {
   const ring = outlineFor(r);
   if (!ring) return;
@@ -998,6 +1105,7 @@ async function refreshRegions() {
   const req = ++regionReq;
   if (!state.regions.length) {
     state.regionData = null;
+    drawRegionMarkers();
     renderSelected();
     renderAnalysis();
     return;
@@ -1011,6 +1119,7 @@ async function refreshRegions() {
     state.regionData = data;
     renderSelected();
     drawRegionsOnMap();
+    drawRegionMarkers();
     renderAnalysis();
   } catch (err) {
     toast(err.message);
