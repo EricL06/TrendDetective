@@ -1897,7 +1897,7 @@
 
         for (const key of [...state.sections.keys()]) if (!keys.includes(key)) dropSection(key);
         if (!keys.length) {
-            r.topics.innerHTML = `<div class="tp-empty">${state.loading ? 'Loading data…' : 'Pick a point or an area (Areas) on the map, choose topics and click “Apply” to plot the data here.'}</div>`;
+            r.topics.innerHTML = `<div class="tp-empty">${state.loading ? 'Loading data…' : 'Pick a point or an area (Areas) on the map, choose variables and click “Analyze” to plot the data here.'}</div>`;
             renderCompare();
             return;
         }
